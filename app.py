@@ -25,7 +25,7 @@ from pathlib import Path
 
 
 APP_NAME = "智能文件复习系统 2.0 WebUI"
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.7.0"
 SCHEMA_VERSION = 3
 DEFAULT_PORT = 8765
 WEBVIEW_WINDOW = None
@@ -39,13 +39,74 @@ DEFAULT_APP_DIR = user_documents_dir() / "LiFileReviewer2"
 PROFILE_POINTER_PATH = DEFAULT_APP_DIR / "profile_location.json"
 
 
+def fs_path(path: str | Path) -> str:
+    value = str(Path(path).expanduser())
+    if platform.system() != "Windows":
+        return value
+    absolute = os.path.abspath(value)
+    if absolute.startswith("\\\\?\\"):
+        return absolute
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute.lstrip("\\")
+    return "\\\\?\\" + absolute
+
+
+def user_path(path: str | Path) -> str:
+    value = str(path)
+    if value.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + value[8:]
+    if value.startswith("\\\\?\\"):
+        return value[4:]
+    return value
+
+
+def path_exists(path: str | Path) -> bool:
+    return os.path.exists(fs_path(path))
+
+
+def path_is_file(path: str | Path) -> bool:
+    return os.path.isfile(fs_path(path))
+
+
+def path_is_dir(path: str | Path) -> bool:
+    return os.path.isdir(fs_path(path))
+
+
+def path_stat(path: str | Path):
+    return os.stat(fs_path(path))
+
+
+def ensure_dir(path: str | Path) -> None:
+    os.makedirs(fs_path(path), exist_ok=True)
+
+
+def read_text_file(path: str | Path) -> str:
+    with open(fs_path(path), "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def write_text_file(path: str | Path, content: str) -> None:
+    ensure_dir(Path(path).parent)
+    with open(fs_path(path), "w", encoding="utf-8") as handle:
+        handle.write(content)
+
+
+def copy_file(src: str | Path, dst: str | Path) -> None:
+    ensure_dir(Path(dst).parent)
+    shutil.copy2(fs_path(src), fs_path(dst))
+
+
+def unlink_file(path: str | Path) -> None:
+    os.unlink(fs_path(path))
+
+
 def resolve_profile_dir() -> Path:
     env_path = os.environ.get("LI_FILE_REVIEWER_PROFILE")
     if env_path:
         return Path(env_path).expanduser().resolve()
     try:
-        if PROFILE_POINTER_PATH.exists():
-            payload = json.loads(PROFILE_POINTER_PATH.read_text(encoding="utf-8"))
+        if path_exists(PROFILE_POINTER_PATH):
+            payload = json.loads(read_text_file(PROFILE_POINTER_PATH))
             app_dir = payload.get("app_dir")
             if app_dir:
                 return Path(app_dir).expanduser().resolve()
@@ -143,25 +204,25 @@ RATING_LABELS = {
 
 
 def ensure_app_dirs() -> None:
-    APP_DIR.mkdir(parents=True, exist_ok=True)
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
-    DEFAULT_NOTES_DIR.mkdir(parents=True, exist_ok=True)
-    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_dir(APP_DIR)
+    ensure_dir(BACKUP_DIR)
+    ensure_dir(PLUGINS_DIR)
+    ensure_dir(DEFAULT_NOTES_DIR)
+    ensure_dir(EXPORT_DIR)
     manifest_path = PLUGINS_DIR / "README.md"
-    if not manifest_path.exists():
-        manifest_path.write_text(
+    if not path_exists(manifest_path):
+        write_text_file(
+            manifest_path,
             "# Plugins\n\n"
             "Put future plugin folders here. Each plugin can provide a `plugin.json` manifest.\n"
             "The current stable app records plugin metadata but does not execute plugin code by default.\n",
-            encoding="utf-8",
         )
 
 
 def log_error(message: str) -> None:
     ensure_app_dirs()
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with LOG_PATH.open("a", encoding="utf-8") as handle:
+    with open(fs_path(LOG_PATH), "a", encoding="utf-8") as handle:
         handle.write(f"[{stamp}] {message}\n")
 
 
@@ -203,9 +264,9 @@ def normalize_config(config: dict) -> tuple[dict, bool]:
 
 def load_config() -> dict:
     ensure_app_dirs()
-    if CONFIG_PATH.exists():
+    if path_exists(CONFIG_PATH):
         try:
-            with CONFIG_PATH.open("r", encoding="utf-8") as handle:
+            with open(fs_path(CONFIG_PATH), "r", encoding="utf-8") as handle:
                 merged = deep_merge(DEFAULT_CONFIG, json.load(handle))
             merged, changed = normalize_config(merged)
             if changed:
@@ -222,20 +283,20 @@ def save_config(config: dict) -> None:
     merged = deep_merge(DEFAULT_CONFIG, config)
     merged["version"] = APP_VERSION
     temp_path = CONFIG_PATH.with_suffix(".json.tmp")
-    with temp_path.open("w", encoding="utf-8") as handle:
+    with open(fs_path(temp_path), "w", encoding="utf-8") as handle:
         json.dump(merged, handle, ensure_ascii=False, indent=2)
-    temp_path.replace(CONFIG_PATH)
+    os.replace(fs_path(temp_path), fs_path(CONFIG_PATH))
 
 
 def write_profile_pointer() -> None:
-    DEFAULT_APP_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_dir(DEFAULT_APP_DIR)
     payload = {
         "app_dir": str(APP_DIR),
         "updated_at": iso_now(),
         "app_version": APP_VERSION,
     }
     if PROFILE_POINTER_PATH.resolve() != (APP_DIR / "profile_location.json").resolve():
-        PROFILE_POINTER_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_text_file(PROFILE_POINTER_PATH, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def profile_paths() -> dict:
@@ -260,7 +321,7 @@ def resource_path(relative: str) -> Path:
 
 
 def notes_dir(config: dict | None = None) -> Path:
-    if config is None and CONFIG_PATH.exists():
+    if config is None and path_exists(CONFIG_PATH):
         try:
             config = load_config()
         except Exception:
@@ -272,12 +333,12 @@ def notes_dir(config: dict | None = None) -> Path:
 
 def ensure_notes_dir(config: dict | None = None) -> Path:
     target = notes_dir(config)
-    target.mkdir(parents=True, exist_ok=True)
+    ensure_dir(target)
     return target
 
 
 def export_dir(config: dict | None = None) -> Path:
-    if config is None and CONFIG_PATH.exists():
+    if config is None and path_exists(CONFIG_PATH):
         try:
             config = load_config()
         except Exception:
@@ -289,7 +350,7 @@ def export_dir(config: dict | None = None) -> Path:
 
 def ensure_export_dir(config: dict | None = None, target_dir: str | Path | None = None) -> Path:
     target = Path(target_dir).expanduser().resolve() if target_dir else export_dir(config)
-    target.mkdir(parents=True, exist_ok=True)
+    ensure_dir(target)
     return target
 
 
@@ -327,7 +388,7 @@ def clamp(value: float, low: float, high: float) -> float:
 @contextmanager
 def get_conn(db_path: Path | None = None):
     ensure_app_dirs()
-    conn = sqlite3.connect(str(db_path or DB_PATH), timeout=30)
+    conn = sqlite3.connect(fs_path(db_path or DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
@@ -353,12 +414,12 @@ def set_db_user_version(conn: sqlite3.Connection, version: int) -> None:
 
 def backup_file(path: Path, reason: str = "manual") -> Path:
     ensure_app_dirs()
-    if not path.exists():
+    if not path_exists(path):
         raise FileNotFoundError(f"无法备份，文件不存在：{path}")
     safe_reason = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in reason)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     target = BACKUP_DIR / f"{path.stem}_{safe_reason}_{stamp}{path.suffix}"
-    shutil.copy2(path, target)
+    copy_file(path, target)
     rotate_backups()
     return target
 
@@ -369,15 +430,15 @@ def backup_sqlite_database(source: Path, reason: str = "manual") -> Path:
 
 
 def backup_sqlite_database_to(source: Path, target_dir: Path, reason: str = "manual") -> Path:
-    target_dir.mkdir(parents=True, exist_ok=True)
-    if not source.exists():
+    ensure_dir(target_dir)
+    if not path_exists(source):
         raise FileNotFoundError(f"无法备份，数据库不存在：{source}")
     safe_reason = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in reason)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     target = target_dir / f"{source.stem}_{safe_reason}_{stamp}{source.suffix}"
-    src = sqlite3.connect(str(source))
+    src = sqlite3.connect(fs_path(source))
     try:
-        dst = sqlite3.connect(str(target))
+        dst = sqlite3.connect(fs_path(target))
         try:
             src.backup(dst)
         finally:
@@ -392,12 +453,12 @@ def backup_sqlite_database_to(source: Path, target_dir: Path, reason: str = "man
 def rotate_backups() -> None:
     config = load_config()
     keep = int(config.get("maintenance", {}).get("keep_backup_count", 30) or 30)
-    if keep <= 0 or not BACKUP_DIR.exists():
+    if keep <= 0 or not path_exists(BACKUP_DIR):
         return
-    backups = sorted(BACKUP_DIR.glob("*.sqlite"), key=lambda p: p.stat().st_mtime, reverse=True)
+    backups = sorted(BACKUP_DIR.glob("*.sqlite"), key=lambda p: path_stat(p).st_mtime, reverse=True)
     for old in backups[keep:]:
         try:
-            old.unlink()
+            unlink_file(old)
         except OSError:
             log_error(f"旧备份清理失败：{old}")
 
@@ -415,7 +476,7 @@ def record_migration(conn: sqlite3.Connection, from_version: int, to_version: in
 def init_db(db_path: Path | None = None) -> None:
     target_db = db_path or DB_PATH
     existing_version = 0
-    if target_db.exists():
+    if path_exists(target_db):
         with get_conn(target_db) as pre_conn:
             existing_version = db_user_version(pre_conn)
         config = load_config()
@@ -587,26 +648,68 @@ def valid_file_ext(path: Path, config: dict) -> bool:
 def safe_filename(value: str, default: str = "note") -> str:
     cleaned = "".join(ch for ch in value.strip() if ch not in '<>:"/\\|?*')
     cleaned = " ".join(cleaned.split())
-    return cleaned[:80] or default
+    return cleaned or default
 
 
-def unique_note_path(base_dir: Path, title: str, ext: str = ".md") -> Path:
+def clean_note_title(value: str, default: str = "新建笔记") -> str:
+    cleaned = " ".join(str(value or "").strip().split())
+    return cleaned or default
+
+
+def unique_file_path(base_dir: Path, title: str, ext: str = ".md", max_stem: int | None = None) -> Path:
     ext = ext if ext.startswith(".") else f".{ext}"
     stem = safe_filename(title, "note")
+    if max_stem is not None:
+        stem = stem[:max_stem]
     candidate = base_dir / f"{stem}{ext}"
-    if not candidate.exists():
+    if not path_exists(candidate):
         return candidate
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     candidate = base_dir / f"{stem}_{stamp}{ext}"
     counter = 2
-    while candidate.exists():
+    while path_exists(candidate):
         candidate = base_dir / f"{stem}_{stamp}_{counter}{ext}"
         counter += 1
     return candidate
 
 
+def unique_note_path(base_dir: Path, title: str, ext: str = ".md") -> Path:
+    return unique_file_path(base_dir, title, ext, max_stem=None)
+
+
+def unique_note_path_resilient(base_dir: Path, title: str, ext: str = ".md") -> Path:
+    # First try the full user-visible title. Only shorten the file name when
+    # the filesystem rejects the path or component length.
+    candidates = [None, 240, 220, 200, 180, 160, 120, 90, 60, 36]
+    last_error = None
+    for max_stem in candidates:
+        candidate = unique_file_path(base_dir, title, ext, max_stem=max_stem)
+        try:
+            ensure_dir(candidate.parent)
+            with open(fs_path(candidate), "x", encoding="utf-8"):
+                pass
+            unlink_file(candidate)
+            return candidate
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            last_error = exc
+    fallback = unique_file_path(base_dir, f"note_{uuid.uuid4().hex[:12]}", ext, max_stem=32)
+    try:
+        ensure_dir(fallback.parent)
+        with open(fs_path(fallback), "x", encoding="utf-8"):
+            pass
+        unlink_file(fallback)
+        return fallback
+    except OSError:
+        if last_error:
+            raise last_error
+        raise
+
+
 def note_row_to_dict(row: sqlite3.Row) -> dict:
     path = Path(row["file_path"])
+    exists = path_exists(path)
     return {
         "id": row["id"],
         "guid": row["guid"],
@@ -616,8 +719,8 @@ def note_row_to_dict(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "source": row["source"],
-        "exists": path.exists(),
-        "size": human_size(path.stat().st_size) if path.exists() else "0 B",
+        "exists": exists,
+        "size": human_size(path_stat(path).st_size) if exists else "0 B",
     }
 
 
@@ -637,7 +740,7 @@ def ensure_library(conn: sqlite3.Connection, root_path: str) -> int:
 def upsert_item(conn: sqlite3.Connection, file_path: Path, root_path: str, library_id: int) -> str:
     now = iso_now()
     try:
-        stat = file_path.stat()
+        stat = path_stat(file_path)
     except OSError:
         return "skipped"
     try:
@@ -700,15 +803,15 @@ def upsert_item(conn: sqlite3.Connection, file_path: Path, root_path: str, libra
 def scan_library(root_path: str, config: dict | None = None) -> dict:
     config = config or load_config()
     root = Path(root_path).expanduser().resolve()
-    if not root.exists() or not root.is_dir():
+    if not path_exists(root) or not path_is_dir(root):
         raise ValueError(f"文件库路径不存在：{root}")
     ignore_dirs = set(config.get("ignore_dirs", []))
     follow_hidden = bool(config.get("follow_hidden_dirs", False))
     added = updated = skipped = scanned = 0
     with get_conn() as conn:
         library_id = ensure_library(conn, str(root))
-        for dirpath, dirnames, filenames in os.walk(root):
-            current = Path(dirpath)
+        for dirpath, dirnames, filenames in os.walk(fs_path(root)):
+            current = Path(user_path(dirpath))
             kept_dirs = []
             for dirname in dirnames:
                 child = current / dirname
@@ -883,7 +986,7 @@ def row_item(row: sqlite3.Row) -> dict:
     due_at = parse_dt(row["due_at"]) or now
     review_count = int(row["review_count"] or 0)
     status = row["status"] or "active"
-    exists = Path(row["file_path"]).exists()
+    exists = path_exists(row["file_path"])
     return {
         "id": row["id"],
         "guid": row["guid"],
@@ -1107,27 +1210,30 @@ def choose_file_dialog(file_types: tuple[str, ...] = ("All files (*.*)",)) -> st
 
 
 def open_path(path: str) -> None:
+    target = user_path(path)
     if platform.system() == "Windows":
-        os.startfile(path)  # type: ignore[attr-defined]
+        os.startfile(target)  # type: ignore[attr-defined]
     elif platform.system() == "Darwin":
-        subprocess.Popen(["open", path])
+        subprocess.Popen(["open", target])
     else:
-        subprocess.Popen(["xdg-open", path])
+        subprocess.Popen(["xdg-open", target])
 
 
 def open_with_dialog(path: str) -> None:
+    target = user_path(path)
     if platform.system() == "Windows":
-        subprocess.Popen(["rundll32.exe", "shell32.dll,OpenAs_RunDLL", str(Path(path))])
+        subprocess.Popen(["rundll32.exe", "shell32.dll,OpenAs_RunDLL", target])
     elif platform.system() == "Darwin":
-        subprocess.Popen(["open", "-a", "Finder", path])
+        subprocess.Popen(["open", "-a", "Finder", target])
     else:
-        subprocess.Popen(["xdg-open", path])
+        subprocess.Popen(["xdg-open", target])
 
 
 def open_parent(path: str) -> None:
-    parent = str(Path(path).parent)
+    target = user_path(path)
+    parent = str(Path(target).parent)
     if platform.system() == "Windows":
-        subprocess.Popen(["explorer", "/select,", path])
+        subprocess.Popen(["explorer", "/select,", target])
     else:
         open_path(parent)
 
@@ -1155,7 +1261,7 @@ def start_review(item_id: int | None = None) -> dict:
         )
         conn.commit()
     config = load_config()
-    if config.get("review", {}).get("auto_open_file", False) and Path(row["file_path"]).exists():
+    if config.get("review", {}).get("auto_open_file", False) and path_exists(row["file_path"]):
         try:
             open_path(row["file_path"])
         except Exception:
@@ -1306,7 +1412,7 @@ def read_note(note_id: int) -> dict:
         raise ValueError("笔记不存在")
     note = note_row_to_dict(row)
     path = Path(note["file_path"])
-    note["content"] = path.read_text(encoding="utf-8") if path.exists() else ""
+    note["content"] = read_text_file(path) if path_exists(path) else ""
     return {"note": note}
 
 
@@ -1315,20 +1421,22 @@ def create_note(payload: dict) -> dict:
     base_dir = ensure_notes_dir(config)
     item_id = payload.get("item_id")
     item_id = int(item_id) if item_id else None
-    title = safe_filename(payload.get("title") or "新建笔记", "新建笔记")
+    title = clean_note_title(payload.get("title") or "新建笔记", "新建笔记")
     ext = config.get("notes", {}).get("default_extension", ".md") or ".md"
-    path = unique_note_path(base_dir, title, ext)
     now = iso_now()
     linked_line = ""
     if item_id:
         with get_conn() as conn:
             item = conn.execute("SELECT file_name, file_path FROM items WHERE id=?", (item_id,)).fetchone()
         if item:
+            if title == "新建笔记" or "复习笔记" not in title:
+                title = f"{item['file_name']} 复习笔记"
             linked_line = f"\n关联资料：{item['file_name']}\n路径：{item['file_path']}\n"
+    path = unique_note_path_resilient(base_dir, title, ext)
     content = payload.get("content")
     if content is None:
         content = f"# {title}\n\n创建时间：{now}{linked_line}\n"
-    path.write_text(content, encoding="utf-8")
+    write_text_file(path, content)
     with get_conn() as conn:
         cur = conn.execute(
             """
@@ -1347,15 +1455,14 @@ def create_note(payload: dict) -> dict:
 def save_note(payload: dict) -> dict:
     note_id = int(payload["id"])
     content = payload.get("content", "")
-    title = safe_filename(payload.get("title") or "未命名笔记", "未命名笔记")
+    title = clean_note_title(payload.get("title") or "未命名笔记", "未命名笔记")
     now = iso_now()
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone()
         if not row:
             raise ValueError("笔记不存在")
         path = Path(row["file_path"])
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        write_text_file(path, content)
         conn.execute("UPDATE notes SET title=?, updated_at=? WHERE id=?", (title, now, note_id))
         conn.commit()
         updated = conn.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone()
@@ -1389,8 +1496,8 @@ def delete_notes(payload: dict) -> dict:
             path = Path(row["file_path"])
             if delete_files:
                 try:
-                    if path.exists() and path.is_file():
-                        path.unlink()
+                    if path_exists(path) and path_is_file(path):
+                        unlink_file(path)
                         deleted_files += 1
                     else:
                         missing_files += 1
@@ -1419,13 +1526,13 @@ def export_notes(payload: dict) -> dict:
         rows = note_rows_by_ids(conn, ids)
     for row in rows:
         src = Path(row["file_path"])
-        if not src.exists() or not src.is_file():
+        if not path_exists(src) or not path_is_file(src):
             missing += 1
             continue
         target = target_dir / src.name
-        if target.exists():
+        if path_exists(target):
             target = unique_note_path(target_dir, target.stem, target.suffix)
-        shutil.copy2(src, target)
+        copy_file(src, target)
         copied += 1
         exported.append(str(target))
     return {"export_dir": str(target_dir), "exported": copied, "missing": missing, "files": exported}
@@ -1438,7 +1545,7 @@ def repair_imported_note_paths() -> None:
         for row in rows:
             original = Path(row["file_path"])
             candidate = DEFAULT_NOTES_DIR / original.name
-            if candidate.exists():
+            if path_exists(candidate):
                 conn.execute("UPDATE notes SET file_path=? WHERE id=?", (str(candidate), row["id"]))
         conn.commit()
 
@@ -1450,17 +1557,17 @@ def tree_for_library(library_id: int, rel: str = "") -> dict:
             raise ValueError("文件库不存在")
         root = Path(library["root_path"]).resolve()
         target = (root / rel).resolve()
-        if os.path.commonpath([str(root), str(target)]) != str(root):
+        if not str(target).lower().startswith(str(root).lower()):
             raise ValueError("路径越界")
         indexed = {
             row["file_path"]: row["id"]
             for row in conn.execute("SELECT id, file_path FROM items WHERE library_id=?", (library_id,)).fetchall()
         }
     children = []
-    if target.exists() and target.is_dir():
+    if path_exists(target) and path_is_dir(target):
         for child in target.iterdir():
             try:
-                stat = child.stat()
+                stat = path_stat(child)
             except OSError:
                 continue
             children.append(
@@ -1468,8 +1575,8 @@ def tree_for_library(library_id: int, rel: str = "") -> dict:
                     "name": child.name,
                     "path": str(child),
                     "rel": str(child.relative_to(root)),
-                    "is_dir": child.is_dir(),
-                    "size": human_size(stat.st_size if child.is_file() else 0),
+                    "is_dir": path_is_dir(child),
+                    "size": human_size(stat.st_size if path_is_file(child) else 0),
                     "ext": child.suffix.lower(),
                     "indexed_id": indexed.get(str(child)),
                 }
@@ -1486,7 +1593,7 @@ def backup_database(target_dir: str | Path | None = None) -> dict:
 def export_csv(target_dir: str | Path | None = None) -> Path:
     target_root = ensure_export_dir(target_dir=target_dir)
     target = target_root / f"review_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    with get_conn() as conn, target.open("w", encoding="utf-8-sig", newline="") as handle:
+    with get_conn() as conn, open(fs_path(target), "w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow([
             "file_name", "file_path", "tags", "status", "due_at",
@@ -1520,7 +1627,7 @@ def export_portable_json(target_dir: str | Path | None = None) -> Path:
                 dict(row) for row in conn.execute("SELECT * FROM schema_migrations ORDER BY id")
             ],
         }
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_text_file(target, json.dumps(payload, ensure_ascii=False, indent=2))
     return target
 
 
@@ -1530,17 +1637,17 @@ def export_profile_package(target_dir: str | Path | None = None) -> Path:
     target = target_root / f"LiFileReviewer2_profile_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     included: list[tuple[Path, str]] = []
     for path in [CONFIG_PATH, LOG_PATH]:
-        if path.exists():
+        if path_exists(path):
             included.append((path, path.name))
-    if DB_PATH.exists():
+    if path_exists(DB_PATH):
         backup_path = backup_sqlite_database(DB_PATH, "profile_export")
         included.append((backup_path, DB_PATH.name))
     for folder, arc_prefix in [(BACKUP_DIR, "backups"), (PLUGINS_DIR, "plugins"), (ensure_notes_dir(), "notes")]:
-        if folder.exists():
+        if path_exists(folder):
             for file_path in folder.rglob("*"):
-                if file_path.is_file():
+                if path_is_file(file_path):
                     included.append((file_path, str(Path(arc_prefix) / file_path.relative_to(folder))))
-    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(fs_path(target), "w", compression=zipfile.ZIP_DEFLATED) as archive:
         manifest = {
             "format": "LiFileReviewerProfile",
             "format_version": 1,
@@ -1554,19 +1661,19 @@ def export_profile_package(target_dir: str | Path | None = None) -> Path:
             if arcname in seen or src.resolve() == target.resolve() or src.suffix.lower() == ".zip":
                 continue
             seen.add(arcname)
-            archive.write(src, arcname)
+            archive.write(fs_path(src), arcname)
     return target
 
 
 def import_profile_package(package_path: str) -> dict:
     package = Path(package_path).expanduser().resolve()
-    if not package.exists() or not package.is_file():
+    if not path_exists(package) or not path_is_file(package):
         raise ValueError(f"迁移包不存在：{package}")
     ensure_app_dirs()
     backup = export_profile_package()
     with tempfile.TemporaryDirectory() as tmp_name:
         tmp_dir = Path(tmp_name)
-        with zipfile.ZipFile(package, "r") as archive:
+        with zipfile.ZipFile(fs_path(package), "r") as archive:
             names = archive.namelist()
             if "manifest.json" not in names:
                 raise ValueError("这不是有效的 LiFileReviewer 迁移包")
@@ -1577,18 +1684,17 @@ def import_profile_package(package_path: str) -> dict:
             archive.extractall(tmp_dir)
         for name in ["config.json", "review_data.sqlite", "app.log"]:
             src = tmp_dir / name
-            if src.exists():
-                shutil.copy2(src, APP_DIR / name)
+            if path_exists(src):
+                copy_file(src, APP_DIR / name)
         for folder_name in ["backups", "plugins", "notes"]:
             src_dir = tmp_dir / folder_name
             dst_dir = APP_DIR / folder_name
-            if src_dir.exists():
-                dst_dir.mkdir(parents=True, exist_ok=True)
+            if path_exists(src_dir):
+                ensure_dir(dst_dir)
                 for src in src_dir.rglob("*"):
-                    if src.is_file():
+                    if path_is_file(src):
                         dst = dst_dir / src.relative_to(src_dir)
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(src, dst)
+                        copy_file(src, dst)
     config = load_config()
     config.setdefault("notes", {})["storage_dir"] = ""
     config.setdefault("exports", {})["default_dir"] = ""
@@ -1600,7 +1706,8 @@ def import_profile_package(package_path: str) -> dict:
 
 def move_profile_dir(target_dir: str) -> dict:
     global APP_DIR
-    new_dir = Path(target_dir).expanduser().resolve()
+    requested_dir = Path(target_dir).expanduser().resolve()
+    new_dir = requested_dir
     if not str(new_dir):
         raise ValueError("缺少新的配置目录")
     old_dir = APP_DIR.resolve()
@@ -1609,39 +1716,49 @@ def move_profile_dir(target_dir: str) -> dict:
     if old_dir in new_dir.parents:
         raise ValueError("新的配置目录不能放在当前配置目录内部")
     ensure_app_dirs()
-    new_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dir(new_dir)
+    allowed = {
+        "backups", "plugins", "notes", "exports", "README.md", "profile_location.json",
+        "config.json", "review_data.sqlite", "app.log", "last_health_check.json", "runtime.json",
+    }
     if any(new_dir.iterdir()):
-        allowed = {
-            "backups", "plugins", "notes", "exports", "README.md", "profile_location.json",
-            "config.json", "review_data.sqlite", "app.log",
-        }
-        unexpected = [path.name for path in new_dir.iterdir() if path.name not in allowed]
-        if unexpected:
-            raise ValueError("目标目录不是空目录，请选择一个空文件夹或专用配置文件夹")
+        if path_exists(new_dir / "config.json") or path_exists(new_dir / "review_data.sqlite"):
+            unexpected = [path.name for path in new_dir.iterdir() if path.name not in allowed]
+            if unexpected:
+                raise ValueError("目标目录已有其它文件，请选择空文件夹、已有软件数据目录，或它下面的专用文件夹")
+        else:
+            new_dir = new_dir / "LiFileReviewer2"
+            if new_dir == old_dir or old_dir in new_dir.parents:
+                raise ValueError("新的配置目录不能放在当前配置目录内部")
+            ensure_dir(new_dir)
+            if any(new_dir.iterdir()):
+                unexpected = [path.name for path in new_dir.iterdir() if path.name not in allowed]
+                if unexpected:
+                    raise ValueError("目标目录下的 LiFileReviewer2 子目录已有其它文件，请选择空文件夹或专用配置文件夹")
     for item in old_dir.iterdir():
         if item.resolve() == PROFILE_POINTER_PATH.resolve():
             continue
         destination = new_dir / item.name
-        if destination.exists():
+        if path_exists(destination):
             continue
-        shutil.move(str(item), str(destination))
+        shutil.move(fs_path(item), fs_path(destination))
     set_app_dir(new_dir)
     ensure_app_dirs()
     write_profile_pointer()
     pointer_inside_profile = APP_DIR / "profile_location.json"
-    pointer_inside_profile.write_text(
+    write_text_file(
+        pointer_inside_profile,
         json.dumps({"app_dir": str(APP_DIR), "updated_at": iso_now(), "app_version": APP_VERSION}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
     init_db()
-    return {"moved": True, "app": profile_paths()}
+    return {"moved": True, "requested_dir": str(requested_dir), "app": profile_paths()}
 
 
 def list_plugins() -> dict:
     ensure_app_dirs()
     plugins = []
     for entry in sorted(PLUGINS_DIR.iterdir(), key=lambda p: p.name.lower()):
-        if not entry.is_dir():
+        if not path_is_dir(entry):
             continue
         manifest = entry / "plugin.json"
         data = {
@@ -1650,11 +1767,11 @@ def list_plugins() -> dict:
             "version": "",
             "enabled": False,
             "path": str(entry),
-            "has_manifest": manifest.exists(),
+            "has_manifest": path_exists(manifest),
         }
-        if manifest.exists():
+        if path_exists(manifest):
             try:
-                payload = json.loads(manifest.read_text(encoding="utf-8"))
+                payload = json.loads(read_text_file(manifest))
                 data.update({key: payload.get(key, data.get(key)) for key in ["id", "name", "version", "description"]})
                 data["enabled"] = bool(payload.get("enabled", False))
             except Exception:
@@ -1671,12 +1788,12 @@ def health_check() -> dict:
     def add(name: str, ok: bool, detail: str = "") -> None:
         checks.append({"name": name, "ok": bool(ok), "detail": detail})
 
-    add("数据目录", APP_DIR.exists() and os.access(APP_DIR, os.W_OK), str(APP_DIR))
-    add("配置文件", CONFIG_PATH.exists(), str(CONFIG_PATH))
-    add("数据库文件", DB_PATH.exists(), str(DB_PATH))
-    add("插件目录", PLUGINS_DIR.exists() and os.access(PLUGINS_DIR, os.W_OK), str(PLUGINS_DIR))
-    add("笔记目录", ensure_notes_dir().exists() and os.access(ensure_notes_dir(), os.W_OK), str(ensure_notes_dir()))
-    add("WebUI 资源", resource_path("web/index.html").exists(), str(resource_path("web/index.html")))
+    add("数据目录", path_exists(APP_DIR) and os.access(fs_path(APP_DIR), os.W_OK), str(APP_DIR))
+    add("配置文件", path_exists(CONFIG_PATH), str(CONFIG_PATH))
+    add("数据库文件", path_exists(DB_PATH), str(DB_PATH))
+    add("插件目录", path_exists(PLUGINS_DIR) and os.access(fs_path(PLUGINS_DIR), os.W_OK), str(PLUGINS_DIR))
+    add("笔记目录", path_exists(ensure_notes_dir()) and os.access(fs_path(ensure_notes_dir()), os.W_OK), str(ensure_notes_dir()))
+    add("WebUI 资源", path_exists(resource_path("web/index.html")), str(resource_path("web/index.html")))
 
     try:
         with get_conn() as conn:
@@ -1686,7 +1803,7 @@ def health_check() -> dict:
             item_count = conn.execute("SELECT COUNT(*) AS c FROM items").fetchone()["c"]
             missing_count = 0
             for row in conn.execute("SELECT file_path FROM items WHERE status!='done'").fetchall():
-                if not Path(row["file_path"]).exists():
+                if not path_exists(row["file_path"]):
                     missing_count += 1
         add("SQLite 完整性", integrity == "ok", integrity)
         add("外键一致性", len(foreign_keys) == 0, f"{len(foreign_keys)} 个外键问题")
@@ -1705,7 +1822,7 @@ def health_check() -> dict:
         "checks": checks,
     }
     report_path = APP_DIR / "last_health_check.json"
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_text_file(report_path, json.dumps(report, ensure_ascii=False, indent=2))
     report["report_path"] = str(report_path)
     return report
 
@@ -1743,11 +1860,12 @@ class AppHandler(BaseHTTPRequestHandler):
             if os.path.commonpath([str(web_dir.resolve()), str(target)]) != str(web_dir.resolve()):
                 self.send_error(403)
                 return
-        if not target.exists() or not target.is_file():
+        if not path_exists(target) or not path_is_file(target):
             self.send_error(404)
             return
         mime = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-        data = target.read_bytes()
+        with open(fs_path(target), "rb") as handle:
+            data = handle.read()
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(data)))
@@ -1828,16 +1946,16 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         file_path = Path(row["file_path"])
-        if not file_path.exists() or not file_path.is_file():
+        if not path_exists(file_path) or not path_is_file(file_path):
             self.send_error(404)
             return
         mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{urllib.parse.quote(file_path.name)}")
-        self.send_header("Content-Length", str(file_path.stat().st_size))
+        self.send_header("Content-Length", str(path_stat(file_path).st_size))
         self.end_headers()
-        with file_path.open("rb") as handle:
+        with open(fs_path(file_path), "rb") as handle:
             shutil.copyfileobj(handle, self.wfile)
 
     def do_POST(self) -> None:
@@ -1910,7 +2028,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not target:
                     raise ValueError("缺少路径")
                 resolved = Path(target).expanduser().resolve()
-                if not resolved.exists():
+                if not path_exists(resolved):
                     raise ValueError(f"路径不存在：{resolved}")
                 if resolved == PROFILE_POINTER_PATH.resolve():
                     raise ValueError("位置指针是内部启动定位文件，不能直接打开")
@@ -1984,7 +2102,7 @@ def find_port(preferred: int) -> int:
 def write_runtime_info(port: int) -> None:
     ensure_app_dirs()
     info = {"url": f"http://127.0.0.1:{port}", "port": port, "started_at": iso_now(), "pid": os.getpid()}
-    (APP_DIR / "runtime.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_text_file(APP_DIR / "runtime.json", json.dumps(info, ensure_ascii=False, indent=2))
 
 
 def start_server(port: int) -> tuple[ThreadingHTTPServer, str]:

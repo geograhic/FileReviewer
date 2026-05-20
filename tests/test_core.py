@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,7 +31,10 @@ class CoreTests(unittest.TestCase):
         self.app.init_db()
 
     def tearDown(self):
-        self.tempdir.cleanup()
+        try:
+            self.tempdir.cleanup()
+        except OSError:
+            shutil.rmtree(self.app.fs_path(self.tmp), ignore_errors=True)
 
     def test_config_roundtrip(self):
         config = self.app.load_config()
@@ -166,6 +170,18 @@ class CoreTests(unittest.TestCase):
         imported = self.app.import_profile_package(str(import_package))
         self.assertTrue(Path(imported["backup_before_import"]).exists())
 
+    def test_move_profile_to_non_empty_parent_creates_dedicated_subdir(self):
+        target_parent = self.tmp / "chosen-folder"
+        target_parent.mkdir()
+        (target_parent / "keep.txt").write_text("user file", encoding="utf-8")
+        result = self.app.move_profile_dir(str(target_parent))
+        expected = target_parent / "LiFileReviewer2"
+        self.assertTrue(result["moved"])
+        self.assertEqual(Path(result["app"]["app_dir"]), expected.resolve())
+        self.assertTrue((expected / "config.json").exists())
+        self.assertTrue((expected / "review_data.sqlite").exists())
+        self.assertTrue((target_parent / "keep.txt").exists())
+
     def test_plugins_directory_listing(self):
         plugin = self.app.PLUGINS_DIR / "sample"
         plugin.mkdir(parents=True)
@@ -191,6 +207,25 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(saved["note"]["title"], "更新笔记")
         notes = self.app.list_notes(started["item"]["id"])
         self.assertEqual(len(notes["notes"]), 1)
+
+    def test_linked_note_works_with_deep_profile_and_long_file_name(self):
+        deep_profile = self.tmp / ("deep_" + "x" * 40) / ("profile_" + "y" * 40)
+        self.app.set_app_dir(deep_profile)
+        self.app.ensure_app_dirs()
+        self.app.save_config(self.app.DEFAULT_CONFIG)
+        self.app.init_db()
+        library = self.tmp / ("library_" + "z" * 40)
+        library.mkdir(parents=True)
+        long_name = "20250915_REF5_How I Study Consistently While Working a 9-5 Full-Time Job " + ("very long " * 8) + ".pdf"
+        source = library / long_name
+        source.write_text("pdf placeholder", encoding="utf-8")
+        self.app.scan_library(str(library), self.app.load_config())
+        started = self.app.start_review()
+        created = self.app.create_note({"item_id": started["item"]["id"], "title": f"{started['item']['file_name']} 复习笔记"})
+        note_path = Path(created["note"]["file_path"])
+        self.assertTrue(self.app.path_exists(note_path))
+        self.assertIn("复习笔记", self.app.read_note(created["note"]["id"])["note"]["content"])
+        self.assertIn("复习笔记", created["note"]["title"])
 
     def test_notes_can_be_exported_and_deleted_in_batches(self):
         first = self.app.create_note({"title": "第一篇", "content": "# one"})["note"]

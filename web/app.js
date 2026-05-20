@@ -668,6 +668,8 @@ I18N["zh-CN"] = {
   "toast.noNoteSelected": "请先选择或新建一篇笔记",
   "toast.notesExported": "已导出 {count} 篇笔记到：{path}",
   "toast.notesDeleted": "已删除 {count} 篇笔记",
+  "toast.movingProfile": "正在迁移主数据目录...",
+  "toast.actionFailed": "操作失败：{message}",
   "toast.scanDone": "扫描完成：新增 {added}，更新 {updated}",
   "toast.scanAll": "正在扫描全部文件库...",
   "toast.scanAllDone": "扫描完成，处理 {count} 条记录",
@@ -731,6 +733,8 @@ Object.assign(I18N["en-US"], {
   "toast.exportDirSelected": "Export folder selected: {path}",
   "toast.notesExported": "Exported {count} notes to: {path}",
   "toast.notesDeleted": "Deleted {count} notes",
+  "toast.movingProfile": "Moving main data folder...",
+  "toast.actionFailed": "Action failed: {message}",
   "toast.selectNotesFirst": "Select notes first",
   "confirm.deleteNotes": "Delete {count} notes? This removes note files and database records.",
 });
@@ -753,7 +757,7 @@ function applyI18n() {
   $$("[data-i18n-placeholder]").forEach((node) => {
     node.setAttribute("placeholder", t(node.dataset.i18nPlaceholder));
   });
-  document.title = state.lang === "en-US" ? "File Review 2.4" : "智能文件复习系统 2.4";
+  document.title = state.lang === "en-US" ? "File Review 2.7" : "智能文件复习系统 2.7";
   updateOnboardingButtons();
 }
 
@@ -811,7 +815,12 @@ function toast(message, isError = false) {
   node.style.background = isError ? "#b91c1c" : "#111827";
   node.classList.add("show");
   clearTimeout(node._timer);
-  node._timer = setTimeout(() => node.classList.remove("show"), 3200);
+  node._timer = setTimeout(() => node.classList.remove("show"), isError ? 6200 : 3200);
+}
+
+function reportError(error) {
+  console.error(error);
+  toast(t("toast.actionFailed", { message: error?.message || String(error) }), true);
 }
 
 function setView(view) {
@@ -1493,11 +1502,21 @@ async function moveProfile() {
     toast(t("toast.pathRequired"), true);
     return;
   }
-  const result = await api("/api/profile/move", { method: "POST", body: { path } });
-  state.overview.app = result.app || state.overview.app;
-  toast(t("toast.profileMoved", { path: result.app?.app_dir || path }));
-  await loadOverview();
-  await healthCheck();
+  const button = $("#moveProfileBtn");
+  button.disabled = true;
+  toast(t("toast.movingProfile"));
+  try {
+    const result = await api("/api/profile/move", { method: "POST", body: { path } });
+    state.overview.app = result.app || state.overview.app;
+    toast(t("toast.profileMoved", { path: result.app?.app_dir || path }));
+    await loadOverview();
+    renderSettings();
+    await healthCheck();
+  } catch (error) {
+    reportError(error);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function chooseImportProfilePackage() {
@@ -1641,57 +1660,61 @@ function closeOnboarding() {
 
 function bindEvents() {
   document.addEventListener("click", async (event) => {
-    const nav = event.target.closest("[data-view]");
-    if (nav) setView(nav.dataset.view);
+    try {
+      const nav = event.target.closest("[data-view]");
+      if (nav) setView(nav.dataset.view);
 
-    const viewLink = event.target.closest("[data-view-link]");
-    if (viewLink) setView(viewLink.dataset.viewLink);
+      const viewLink = event.target.closest("[data-view-link]");
+      if (viewLink) setView(viewLink.dataset.viewLink);
 
-    const start = event.target.closest("[data-start-review]");
-    if (start) await startReview(start.dataset.startReview);
+      const start = event.target.closest("[data-start-review]");
+      if (start) await startReview(start.dataset.startReview);
 
-    const open = event.target.closest("[data-open-item]");
-    if (open) await openItem(open.dataset.openItem);
+      const open = event.target.closest("[data-open-item]");
+      if (open) await openItem(open.dataset.openItem);
 
-    const folder = event.target.closest("[data-folder-item]");
-    if (folder) await openFolder(folder.dataset.folderItem);
+      const folder = event.target.closest("[data-folder-item]");
+      if (folder) await openFolder(folder.dataset.folderItem);
 
-    const noteCheck = event.target.closest("[data-note-check]");
-    if (noteCheck) {
-      const id = Number(noteCheck.dataset.noteCheck);
-      if (noteCheck.checked) state.selectedNoteIds.add(id);
-      else state.selectedNoteIds.delete(id);
-      renderNotesList();
-      return;
-    }
-
-    const note = event.target.closest("[data-note-id]");
-    if (note) await loadNote(Number(note.dataset.noteId));
-
-    const library = event.target.closest("[data-library-id]");
-    if (library) {
-      state.activeLibraryId = Number(library.dataset.libraryId);
-      state.treeRel = "";
-      renderLibraries();
-    }
-
-    const tree = event.target.closest("[data-tree-rel]");
-    if (tree) {
-      const isDir = tree.dataset.isDir === "true" || tree.classList.contains("dir");
-      if (isDir) {
-        await loadTree(state.activeLibraryId, tree.dataset.treeRel || "");
-      } else if (tree.dataset.indexedId) {
-        await startReview(tree.dataset.indexedId);
+      const noteCheck = event.target.closest("[data-note-check]");
+      if (noteCheck) {
+        const id = Number(noteCheck.dataset.noteCheck);
+        if (noteCheck.checked) state.selectedNoteIds.add(id);
+        else state.selectedNoteIds.delete(id);
+        renderNotesList();
+        return;
       }
-    }
 
-    if (event.target.closest("#emptyAddLibraryBtn") || event.target.closest("#emptyTableAddLibraryBtn")) {
-      await chooseLibrary();
-    }
+      const note = event.target.closest("[data-note-id]");
+      if (note) await loadNote(Number(note.dataset.noteId));
 
-    const commonPath = event.target.closest("[data-common-path]");
-    if (commonPath) {
-      $("#manualLibraryPath").value = commonPath.dataset.commonPath || "";
+      const library = event.target.closest("[data-library-id]");
+      if (library) {
+        state.activeLibraryId = Number(library.dataset.libraryId);
+        state.treeRel = "";
+        renderLibraries();
+      }
+
+      const tree = event.target.closest("[data-tree-rel]");
+      if (tree) {
+        const isDir = tree.dataset.isDir === "true" || tree.classList.contains("dir");
+        if (isDir) {
+          await loadTree(state.activeLibraryId, tree.dataset.treeRel || "");
+        } else if (tree.dataset.indexedId) {
+          await startReview(tree.dataset.indexedId);
+        }
+      }
+
+      if (event.target.closest("#emptyAddLibraryBtn") || event.target.closest("#emptyTableAddLibraryBtn")) {
+        await chooseLibrary();
+      }
+
+      const commonPath = event.target.closest("[data-common-path]");
+      if (commonPath) {
+        $("#manualLibraryPath").value = commonPath.dataset.commonPath || "";
+      }
+    } catch (error) {
+      reportError(error);
     }
   });
 
@@ -1840,6 +1863,13 @@ async function init() {
 }
 
 init().catch((error) => {
-  console.error(error);
-  toast(error.message, true);
+  reportError(error);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  reportError(event.reason || new Error("Unhandled promise rejection"));
+});
+
+window.addEventListener("error", (event) => {
+  reportError(event.error || new Error(event.message));
 });
