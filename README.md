@@ -70,5 +70,5 @@ dist\智能文件复习系统2.0_WebUI.exe
 长期维护说明见 `MAINTENANCE.md`。建议每次升级前在设置页执行“体检”“备份数据库”“导出迁移包”。
 
 ## 软件下载
-见Release：https://github.com/geograhic/FileReviewer/releases/download/Education/2.5_WebUI.exe
+见Release：https://github.com/geograhic/FileReviewer/releases/
 
