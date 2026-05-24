@@ -1,6 +1,6 @@
 ﻿# 智能文件复习系统 2.0 WebUI
 
-这是独立新版本，不会修改 1.x 原项目文件夹。当前应用版本为 `2.12.0`，默认以桌面窗口运行，不再像普通网页一样弹浏览器，也不会显示黑色命令行窗口。
+当前应用版本为 `2.12.0`，默认以桌面窗口运行。
 
 ## 启动
 
@@ -66,6 +66,7 @@ Windows 深层目录和长文件名会自动启用长路径兼容。关联资料
 
 ```powershell
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name "智能文件复习系统2.12.0_WebUI" --add-data "web;web" --hidden-import webview.platforms.winforms app.py
+
 ```
 
 打包完成后运行：
@@ -77,4 +78,7 @@ dist\智能文件复习系统2.12.0_WebUI.exe
 ## 长期维护
 
 长期维护说明见 `MAINTENANCE.md`。建议每次升级前在设置页执行“体检”“备份数据库”“导出迁移包”。
+
+## 软件下载
+见Release或https://mp.weixin.qq.com/s/YRXZVs5aG77f4r8zCXQjGw
 
