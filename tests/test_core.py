@@ -1,8 +1,10 @@
 import importlib.util
 import json
 import shutil
+import sqlite3
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 
@@ -104,6 +106,72 @@ class CoreTests(unittest.TestCase):
             count = conn.execute("SELECT COUNT(*) AS c FROM schema_migrations").fetchone()["c"]
         self.assertGreaterEqual(count, 1)
 
+    def test_legacy_schema_without_deck_id_migrates_before_index_creation(self):
+        legacy_dir = self.tmp / "legacy-data"
+        self.app.set_app_dir(legacy_dir)
+        self.app.ensure_app_dirs()
+        self.app.save_config(self.app.DEFAULT_CONFIG)
+        now = self.app.iso_now()
+        conn = sqlite3.connect(self.app.fs_path(self.app.DB_PATH))
+        try:
+            conn.execute("PRAGMA user_version = 3")
+            conn.execute(
+                """
+                CREATE TABLE items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guid TEXT NOT NULL UNIQUE,
+                    library_id INTEGER,
+                    root_path TEXT,
+                    relative_path TEXT,
+                    file_path TEXT NOT NULL UNIQUE,
+                    file_name TEXT NOT NULL,
+                    ext TEXT,
+                    size_bytes INTEGER DEFAULT 0,
+                    modified_at TEXT,
+                    added_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_seen_at TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    tags TEXT DEFAULT '',
+                    priority INTEGER DEFAULT 0,
+                    notes TEXT DEFAULT '',
+                    due_at TEXT NOT NULL,
+                    interval_days REAL DEFAULT 0,
+                    ease_factor REAL DEFAULT 2.5,
+                    stability REAL DEFAULT 2.5,
+                    difficulty REAL DEFAULT 5.0,
+                    retrievability REAL DEFAULT 1.0,
+                    review_count INTEGER DEFAULT 0,
+                    lapse_count INTEGER DEFAULT 0,
+                    total_read_seconds INTEGER DEFAULT 0,
+                    last_review_at TEXT,
+                    pinned INTEGER DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO items(
+                    guid, file_path, file_name, ext, added_at, updated_at, due_at
+                ) VALUES('legacy-guid', ?, 'legacy.md', '.md', ?, ?, ?)
+                """,
+                (str(self.tmp / "legacy.md"), now, now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.app.init_db()
+        with self.app.get_conn() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(items)").fetchall()}
+            tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            indexes = {row["name"] for row in conn.execute("PRAGMA index_list(items)").fetchall()}
+            row = conn.execute("SELECT deck_id FROM items WHERE guid='legacy-guid'").fetchone()
+        self.assertIn("deck_id", columns)
+        self.assertIn("social_profile", tables)
+        self.assertIn("idx_items_deck", indexes)
+        self.assertIsNotNone(row["deck_id"])
+        self.assertEqual(self.app.get_overview()["app"]["version"], self.app.APP_VERSION)
+
     def test_health_check_and_portable_export(self):
         library = self.tmp / "library"
         library.mkdir()
@@ -129,6 +197,28 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(csv_path.parent, export_dir.resolve())
         self.assertEqual(json_path.parent, export_dir.resolve())
         self.assertEqual(profile_path.parent, export_dir.resolve())
+
+    def test_exports_and_backup_use_exact_target_file_paths(self):
+        target_dir = self.tmp / "exact-exports"
+        csv_path = target_dir / "custom.csv"
+        json_path = target_dir / "custom.json"
+        profile_path = target_dir / "custom.zip"
+        backup_path = target_dir / "custom.sqlite"
+        share_source = self.tmp / "share-exact.md"
+        share_source.write_text("# share", encoding="utf-8")
+        item = self.app.add_single_file(str(share_source))["item"]
+        share_path = target_dir / "share.zip"
+
+        self.assertEqual(self.app.export_csv(target_path=csv_path), csv_path.resolve())
+        self.assertEqual(self.app.export_portable_json(target_path=json_path), json_path.resolve())
+        self.assertEqual(self.app.export_profile_package(target_path=profile_path), profile_path.resolve())
+        backup = self.app.backup_database(target_path=backup_path)
+        share = self.app.export_share_package({"ids": [item["id"]], "target_path": str(share_path)})
+
+        for path in [csv_path, json_path, profile_path, backup_path, share_path]:
+            self.assertTrue(path.exists(), path)
+        self.assertEqual(Path(backup["backup_path"]), backup_path.resolve())
+        self.assertEqual(Path(share["export_path"]), share_path.resolve())
 
     def test_choose_folder_dialog_uses_webview_folder_dialog(self):
         class FakeWindow:
@@ -170,6 +260,20 @@ class CoreTests(unittest.TestCase):
         imported = self.app.import_profile_package(str(import_package))
         self.assertTrue(Path(imported["backup_before_import"]).exists())
 
+    def test_import_profile_package_uses_exact_backup_path(self):
+        created = self.app.create_note({"title": "import backup", "content": "# portable"})
+        package = self.app.export_profile_package(target_path=self.tmp / "source_profile.zip")
+        backup_before_import = self.tmp / "before-import.zip"
+        destination = self.tmp / "fresh-profile-with-custom-backup"
+        self.app.set_app_dir(destination)
+        self.app.ensure_app_dirs()
+        self.app.init_db()
+        imported = self.app.import_profile_package(str(package), backup_target_path=backup_before_import)
+        self.assertEqual(Path(imported["backup_before_import"]), backup_before_import.resolve())
+        self.assertTrue(backup_before_import.exists())
+        self.assertEqual(len(self.app.list_notes()["notes"]), 1)
+        self.assertTrue(created["note"]["file_path"])
+
     def test_move_profile_to_non_empty_parent_creates_dedicated_subdir(self):
         target_parent = self.tmp / "chosen-folder"
         target_parent.mkdir()
@@ -190,7 +294,112 @@ class CoreTests(unittest.TestCase):
             encoding="utf-8",
         )
         result = self.app.list_plugins()
-        self.assertEqual(result["plugins"][0]["name"], "Sample Plugin")
+        names = {plugin["name"] for plugin in result["plugins"]}
+        self.assertIn("成就系统", names)
+        self.assertIn("社交资料", names)
+        self.assertIn("Sample Plugin", names)
+
+    def test_import_plugin_folder_and_toggle(self):
+        source = self.tmp / "plugin-source"
+        source.mkdir()
+        (source / "plugin.json").write_text(
+            json.dumps({"id": "folder_pack", "name": "Folder Pack", "version": "1.0.0", "enabled": False}),
+            encoding="utf-8",
+        )
+        (source / "README.md").write_text("hello", encoding="utf-8")
+        result = self.app.import_plugin(source)
+        imported = result["plugin"]
+        self.assertEqual(imported["id"], "folder_pack")
+        imported_path = Path(imported["path"])
+        self.assertTrue((imported_path / "plugin.json").exists())
+        self.assertTrue((imported_path / "README.md").exists())
+        listed = {plugin["id"]: plugin for plugin in self.app.list_plugins()["plugins"]}
+        self.assertTrue(listed["folder_pack"]["enabled"])
+        self.app.set_plugin_enabled("folder_pack", False)
+        listed = {plugin["id"]: plugin for plugin in self.app.list_plugins()["plugins"]}
+        self.assertFalse(listed["folder_pack"]["enabled"])
+
+    def test_import_plugin_zip_package(self):
+        source = self.tmp / "zip-plugin"
+        source.mkdir()
+        (source / "plugin.json").write_text(
+            json.dumps({"id": "zip_pack", "name": "Zip Pack", "version": "0.2.0"}),
+            encoding="utf-8",
+        )
+        package = self.tmp / "zip-plugin.zip"
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.write(source / "plugin.json", "zip-plugin/plugin.json")
+        result = self.app.import_plugin(package, enable=False)
+        self.assertEqual(result["plugin"]["id"], "zip_pack")
+        listed = {plugin["id"]: plugin for plugin in self.app.list_plugins()["plugins"]}
+        self.assertIn("zip_pack", listed)
+        self.assertFalse(listed["zip_pack"]["enabled"])
+
+    def test_import_plugin_accepts_utf8_bom_manifest(self):
+        source = self.tmp / "bom-plugin"
+        source.mkdir()
+        payload = json.dumps({"id": "bom_pack", "name": "BOM Pack"})
+        (source / "plugin.json").write_text("\ufeff" + payload, encoding="utf-8")
+        result = self.app.import_plugin(source)
+        self.assertEqual(result["plugin"]["id"], "bom_pack")
+        listed = {plugin["id"]: plugin for plugin in self.app.list_plugins()["plugins"]}
+        self.assertIn("bom_pack", listed)
+
+    def test_import_plugin_rejects_unsafe_zip_paths(self):
+        package = self.tmp / "unsafe-plugin.zip"
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("../plugin.json", json.dumps({"id": "unsafe"}))
+        with self.assertRaises(ValueError):
+            self.app.import_plugin(package)
+
+    def test_core_plugin_toggle_controls_achievements(self):
+        self.assertTrue(self.app.achievement_summary()["enabled"])
+        toggled = self.app.set_plugin_enabled("achievement_core", False)
+        self.assertFalse([p for p in toggled["plugins"] if p["id"] == "achievement_core"][0]["enabled"])
+        summary = self.app.achievement_summary()
+        self.assertFalse(summary["enabled"])
+        self.assertEqual(summary["total"], 0)
+        overview = self.app.get_overview()
+        self.assertFalse(overview["achievements"]["enabled"])
+        self.app.set_plugin_enabled("achievement_core", True)
+        self.assertTrue(self.app.achievement_summary()["enabled"])
+
+    def test_social_profile_plugin_save_card_and_disable(self):
+        saved = self.app.save_social_profile({
+            "profile": {
+                "display_name": "LJL",
+                "handle": "@ljl",
+                "bio": "Learning in public",
+                "website": "https://example.com",
+                "share_stats": True,
+                "share_achievements": True,
+                "allow_friend_discovery": True,
+            }
+        })
+        self.assertTrue(saved["enabled"])
+        self.assertEqual(saved["profile"]["handle"], "@ljl")
+        card = self.app.social_card()
+        self.assertEqual(card["profile"]["display_name"], "LJL")
+        self.assertIn("stats", card)
+        self.app.set_plugin_enabled("social_profile", False)
+        self.assertFalse(self.app.get_social_profile()["enabled"])
+        overview = self.app.get_overview()
+        self.assertFalse(overview["social"]["enabled"])
+        with self.assertRaises(ValueError):
+            self.app.save_social_profile({"display_name": "blocked"})
+
+    def test_frontend_plugin_hosts_remove_disabled_module_placeholders(self):
+        web_dir = self.app.resource_path("web")
+        index_html = (web_dir / "index.html").read_text(encoding="utf-8")
+        app_js = (web_dir / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="dashboardPluginHost"', index_html)
+        self.assertIn('id="settingsPluginHost"', index_html)
+        self.assertNotIn('id="achievementSummary"', index_html)
+        self.assertNotIn('id="socialDisplayNameInput"', index_html)
+        self.assertGreaterEqual(app_js.count('host.innerHTML = ""'), 2)
+        self.assertIn('layout.classList.add("no-achievements")', app_js)
+        self.assertNotIn('t("plugins.achievementDisabled")', app_js)
+        self.assertNotIn('t("social.disabledHint")', app_js)
 
     def test_markdown_notes_are_real_files_and_saved(self):
         library = self.tmp / "library"
@@ -244,8 +453,6 @@ class CoreTests(unittest.TestCase):
     def test_profile_package_contains_notes_folder(self):
         created = self.app.create_note({"title": "迁移笔记", "content": "# portable"})
         package = self.app.export_profile_package()
-        import zipfile
-
         with zipfile.ZipFile(package, "r") as archive:
             names = archive.namelist()
         self.assertIn("notes/迁移笔记.md", names)
@@ -264,6 +471,136 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(Path(notes[0]["file_path"]).parent, self.app.DEFAULT_NOTES_DIR)
         self.assertTrue(Path(notes[0]["file_path"]).exists())
         self.assertNotEqual(Path(notes[0]["file_path"]), Path(created["file_path"]))
+
+    def test_single_file_can_be_added_without_library(self):
+        source = self.tmp / "single.md"
+        source.write_text("# single", encoding="utf-8")
+        result = self.app.add_single_file(str(source), tags="solo")
+        self.assertEqual(result["result"], "added")
+        self.assertIsNone(result["item"]["library_id"])
+        self.assertEqual(result["item"]["file_name"], "single.md")
+        started = self.app.start_review(result["item"]["id"])
+        self.assertEqual(started["item"]["id"], result["item"]["id"])
+
+    def test_single_file_accepts_unconfigured_extension(self):
+        source = self.tmp / "raw.customext"
+        source.write_text("raw", encoding="utf-8")
+        result = self.app.add_single_file(str(source))
+        self.assertEqual(result["result"], "added")
+        self.assertEqual(result["item"]["ext"], ".customext")
+
+    def test_decks_create_assign_and_delete(self):
+        source = self.tmp / "decked.md"
+        source.write_text("# decked", encoding="utf-8")
+        created_deck = self.app.create_deck({"name": "Research", "description": "papers"})["deck"]
+        item = self.app.add_single_file(str(source), deck_id=created_deck["id"])["item"]
+        queried = self.app.query_items({"deck_id": [str(created_deck["id"])], "status": ["all"]})
+        self.assertEqual(queried["total"], 1)
+        self.assertEqual(queried["items"][0]["deck_id"], created_deck["id"])
+        default_deck = [deck for deck in self.app.list_decks()["decks"] if deck["is_default"]][0]
+        deleted = self.app.delete_deck({"id": created_deck["id"]})
+        self.assertEqual(deleted["deleted"], 1)
+        updated = self.app.query_items({"status": ["all"]})["items"][0]
+        self.assertEqual(updated["deck_id"], default_deck["id"])
+        self.assertEqual(item["file_name"], "decked.md")
+
+    def test_rescan_preserves_existing_deck_when_no_deck_selected(self):
+        library = self.tmp / "deck-library"
+        library.mkdir()
+        source = library / "paper.md"
+        source.write_text("# paper", encoding="utf-8")
+        deck = self.app.create_deck({"name": "Papers"})["deck"]
+        self.app.scan_library(str(library), self.app.load_config(), deck_id=deck["id"])
+        self.app.scan_library(str(library), self.app.load_config())
+        item = self.app.query_items({"status": ["all"]})["items"][0]
+        self.assertEqual(item["deck_id"], deck["id"])
+
+    def test_achievements_unlock_for_file_deck_tag_note_and_review(self):
+        source = self.tmp / "achieve.md"
+        source.write_text("# achieve", encoding="utf-8")
+        deck = self.app.create_deck({"name": "Milestones"})["deck"]
+        item = self.app.add_single_file(str(source), deck_id=deck["id"], tags="tagged")["item"]
+        started = self.app.start_review(item["id"])
+        self.app.finish_review({"item_id": item["id"], "session_id": started["session_id"], "rating": 2})
+        self.app.create_note({"item_id": item["id"], "title": "linked", "content": "# linked"})
+        summary = self.app.achievement_summary()
+        unlocked = {row["id"] for row in summary["achievements"] if row["unlocked"]}
+        self.assertIn("first_item", unlocked)
+        self.assertIn("first_single_file", unlocked)
+        self.assertIn("first_deck", unlocked)
+        self.assertIn("first_tag", unlocked)
+        self.assertIn("first_review", unlocked)
+        self.assertIn("first_note", unlocked)
+
+    def test_achievement_plugin_adds_unlimited_json_rewards(self):
+        plugin = self.app.PLUGINS_DIR / "review_marathon"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "id": "review_marathon",
+                    "name": "Review Marathon",
+                    "version": "1.0.0",
+                    "enabled": True,
+                    "achievements": [
+                        {
+                            "id": "two_reviews",
+                            "title": "Two Reviews",
+                            "description": "Finish two reviews",
+                            "metric": "reviews",
+                            "target": 2,
+                            "points": 120,
+                            "tier": "gold",
+                        },
+                        {
+                            "id": "one_backup",
+                            "title": "Backup Keeper",
+                            "description": "Make a backup",
+                            "metric": "event:backup_database",
+                            "target": 1,
+                            "points": 30,
+                            "tier": "silver",
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        source = self.tmp / "plugin-achieve.md"
+        source.write_text("# achieve", encoding="utf-8")
+        item = self.app.add_single_file(str(source))["item"]
+        for _ in range(2):
+            started = self.app.start_review(item["id"])
+            self.app.finish_review({"item_id": item["id"], "session_id": started["session_id"], "rating": 2})
+        self.app.backup_database(target_path=self.tmp / "plugin-backup.sqlite")
+
+        summary = self.app.achievement_summary()
+        by_id = {row["id"]: row for row in summary["achievements"]}
+        self.assertTrue(by_id["plugin:review_marathon:two_reviews"]["unlocked"])
+        self.assertTrue(by_id["plugin:review_marathon:one_backup"]["unlocked"])
+        self.assertGreaterEqual(summary["points"], 150)
+        self.assertGreaterEqual(summary["reward"]["level"], 2)
+
+    def test_share_package_exports_manifest_notes_and_optional_files(self):
+        source = self.tmp / "share.md"
+        source.write_text("# share", encoding="utf-8")
+        item = self.app.add_single_file(str(source), tags="share")["item"]
+        self.app.create_note({"item_id": item["id"], "title": "share-note", "content": "# note"})
+        package = self.app.export_share_package({
+            "ids": [item["id"]],
+            "include_files": True,
+            "target_dir": str(self.tmp / "share-out"),
+        })
+        archive_path = Path(package["export_path"])
+        self.assertTrue(archive_path.exists())
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            names = set(archive.namelist())
+            manifest = json.loads(archive.read("share_manifest.json").decode("utf-8"))
+        self.assertEqual(manifest["format"], "LiFileReviewerShare")
+        self.assertIn("items.json", names)
+        self.assertIn("notes.json", names)
+        self.assertTrue(any(name.startswith("files/") for name in names))
 
 
 if __name__ == "__main__":

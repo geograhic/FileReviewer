@@ -6,6 +6,7 @@ const state = {
   onboardingStep: 0,
   items: [],
   libraries: [],
+  decks: [],
   notes: [],
   activeNoteId: null,
   selectedNoteIds: new Set(),
@@ -13,12 +14,14 @@ const state = {
   treeRel: "",
   commonPaths: [],
   plugins: [],
+  social: null,
   filters: {
     search: "",
     status: "active",
     due: "all",
     sort: "due_at",
     direction: "asc",
+    deckId: "",
   },
   selectedIds: new Set(),
   review: {
@@ -697,6 +700,69 @@ I18N["zh-CN"] = {
 };
 
 Object.assign(I18N["en-US"], {
+  "actions.chooseFile": "Choose single file",
+  "actions.addFile": "Add File",
+  "actions.newDeck": "New Deck",
+  "actions.share": "Share",
+  "achievements.title": "Achievements",
+  "achievements.progress": "{unlocked}/{total} unlocked",
+  "achievements.level": "Lv.{level} {title} · {points} XP",
+  "decks.title": "Review Decks",
+  "decks.filter": "Deck filter",
+  "decks.all": "All decks",
+  "batch.deck": "Assign deck",
+  "batch.deckShort": "Deck",
+  "table.deck": "Deck",
+  "empty.noLibraryBody": "Add a library folder, or add a single file directly.",
+  "help.singleFileTitle": "Single Files",
+  "help.singleFileBody": "Add an individual PDF, document, image, or video directly without scanning a folder first.",
+  "help.decksTitle": "Decks and Tags",
+  "help.decksBody": "Create Anki-like review decks, batch assign files into categories, and use tags for finer organization.",
+  "help.shareTitle": "Share Packages",
+  "help.shareBody": "Export selected files or a deck as a share package. It includes indexes, decks, tags, and notes by default, and can optionally include source files.",
+  "help.exportBody": "Every export and backup asks where to save first. You can still set a default export folder to make the dialog start in your preferred location.",
+  "help.pluginsBody": "Use Plugin Manager to import ZIP packages or plugin folders, open the plugins folder, and enable or disable modules. Achievement packs are JSON manifests by default.",
+  "plugins.title": "Plugin Manager",
+  "plugins.enabled": "Enabled",
+  "plugins.disabled": "Disabled",
+  "plugins.enabledToast": "Plugin enabled",
+  "plugins.disabledToast": "Plugin disabled",
+  "plugins.importZip": "Import ZIP",
+  "plugins.importFolder": "Import Folder",
+  "plugins.openFolder": "Open Folder",
+  "plugins.imported": "Plugin imported: {name}",
+  "social.title": "Social Profile",
+  "social.displayName": "Display name",
+  "social.handle": "Handle",
+  "social.website": "Website",
+  "social.contact": "Contact",
+  "social.bio": "Bio",
+  "social.shareStats": "Share study stats",
+  "social.shareAchievements": "Share achievement level",
+  "social.friendDiscovery": "Allow future friend discovery",
+  "social.copyCard": "Copy Social Card JSON",
+  "social.enabledHint": "Social plugin is enabled. This is local profile data for future sharing features.",
+  "social.saved": "Social profile saved",
+  "social.cardCopied": "Social card copied",
+  "social.copyFallback": "Copy this social card JSON:",
+  "toast.fileAdded": "File added: {name}",
+  "toast.deckCreated": "Deck created: {name}",
+  "toast.deckUpdated": "Deck updated",
+  "toast.deckDeleted": "Deck deleted; items moved to the default deck",
+  "toast.deckAssigned": "Assigned {count} files to deck",
+  "toast.shareExported": "Share package exported: {path}",
+  "toast.openingSavePicker": "Choose where to save...",
+  "dialog.exportCsv": "Save CSV export",
+  "dialog.exportJson": "Save portable JSON",
+  "dialog.exportProfile": "Save migration package",
+  "dialog.backupBeforeImport": "Save backup before importing",
+  "dialog.backupDb": "Save database backup",
+  "dialog.exportShare": "Save share package",
+  "prompt.deckName": "Deck name:",
+  "prompt.deckDescription": "Deck description:",
+  "prompt.chooseDeck": "Enter a deck number:",
+  "confirm.deleteDeck": "Delete deck \"{name}\"? Its files will move to the default deck.",
+  "confirm.includeFiles": "Include original source files in the share package? Choose Cancel to export metadata and notes only.",
   "nav.help": "Help",
   "actions.chooseExportDir": "Choose Export Folder",
   "actions.openExportFolder": "Open Export Folder",
@@ -739,6 +805,72 @@ Object.assign(I18N["en-US"], {
   "confirm.deleteNotes": "Delete {count} notes? This removes note files and database records.",
 });
 
+Object.assign(I18N["zh-CN"], {
+  "actions.chooseFile": "选择单个文件",
+  "actions.addFile": "添加文件",
+  "actions.newDeck": "新建卡组",
+  "actions.share": "分享",
+  "achievements.title": "成就",
+  "achievements.progress": "已解锁 {unlocked}/{total}",
+  "achievements.level": "Lv.{level} {title} · {points} XP",
+  "decks.title": "复习卡组",
+  "decks.filter": "卡组筛选",
+  "decks.all": "全部卡组",
+  "batch.deck": "分配卡组",
+  "batch.deckShort": "卡组",
+  "table.deck": "卡组",
+  "empty.noLibraryBody": "可以添加文件夹作为文件库，也可以直接添加单个文件。",
+  "help.singleFileTitle": "单独文件",
+  "help.singleFileBody": "可以直接添加某一个 PDF、文档、图片或视频，不必先扫描文件夹。",
+  "help.decksTitle": "卡组与标签",
+  "help.decksBody": "像 Anki 一样创建复习卡组，批量把资料放进分类，再用标签继续细分。",
+  "help.shareTitle": "分享包",
+  "help.shareBody": "勾选资料或选择卡组后可导出分享包，默认包含索引、卡组、标签和笔记，也可选择包含原始文件。",
+  "help.exportBody": "所有导出和备份都会先让你选择保存位置。默认导出目录仍然保留，用来让保存窗口优先打开到你喜欢的位置。",
+  "help.pluginsBody": "插件管理支持导入 ZIP 插件包、导入插件文件夹、打开插件目录，并可启用或关闭模块。成就包默认使用 JSON 清单扩展，稳定优先。",
+  "plugins.title": "插件管理",
+  "plugins.enabled": "已启用",
+  "plugins.disabled": "已关闭",
+  "plugins.enabledToast": "插件已启用",
+  "plugins.disabledToast": "插件已关闭",
+  "plugins.importZip": "导入插件包",
+  "plugins.importFolder": "导入文件夹",
+  "plugins.openFolder": "打开目录",
+  "plugins.imported": "插件已导入：{name}",
+  "social.title": "社交资料",
+  "social.displayName": "显示名称",
+  "social.handle": "账号 ID",
+  "social.website": "主页",
+  "social.contact": "联系信息",
+  "social.bio": "简介",
+  "social.shareStats": "分享学习统计",
+  "social.shareAchievements": "分享成就等级",
+  "social.friendDiscovery": "允许未来好友发现",
+  "social.copyCard": "复制社交名片 JSON",
+  "social.enabledHint": "社交插件已启用。当前只保存本地资料，为未来分享、好友和协作学习做准备。",
+  "social.saved": "社交资料已保存",
+  "social.cardCopied": "社交名片已复制",
+  "social.copyFallback": "复制这段社交名片 JSON：",
+  "toast.fileAdded": "已添加文件：{name}",
+  "toast.deckCreated": "已创建卡组：{name}",
+  "toast.deckUpdated": "卡组已更新",
+  "toast.deckDeleted": "卡组已删除，资料已移到默认卡组",
+  "toast.deckAssigned": "已将 {count} 个文件分配到卡组",
+  "toast.shareExported": "分享包已导出：{path}",
+  "toast.openingSavePicker": "正在选择保存位置...",
+  "dialog.exportCsv": "保存 CSV 导出",
+  "dialog.exportJson": "保存可迁移 JSON",
+  "dialog.exportProfile": "保存迁移包",
+  "dialog.backupBeforeImport": "保存导入前备份",
+  "dialog.backupDb": "保存数据库备份",
+  "dialog.exportShare": "保存分享包",
+  "prompt.deckName": "卡组名称：",
+  "prompt.deckDescription": "卡组说明：",
+  "prompt.chooseDeck": "输入卡组编号：",
+  "confirm.deleteDeck": "确定删除卡组“{name}”？其中资料会移到默认卡组。",
+  "confirm.includeFiles": "是否把原始文件也放进分享包？点“取消”则只导出索引和笔记。",
+});
+
 function t(key, vars = {}) {
   const pack = I18N[state.lang] || I18N["zh-CN"];
   const fallback = I18N["zh-CN"][key] || key;
@@ -757,7 +889,7 @@ function applyI18n() {
   $$("[data-i18n-placeholder]").forEach((node) => {
     node.setAttribute("placeholder", t(node.dataset.i18nPlaceholder));
   });
-  document.title = state.lang === "en-US" ? "File Review 2.7" : "智能文件复习系统 2.7";
+  document.title = state.lang === "en-US" ? "File Review 2.12.0" : "智能文件复习系统 2.12.0";
   updateOnboardingButtons();
 }
 
@@ -868,11 +1000,15 @@ async function loadOverview() {
   state.config = state.overview.config;
   state.lang = localStorage.getItem("fileReviewerLanguage") || state.config?.ui?.language || "zh-CN";
   state.libraries = state.overview.libraries || [];
+  state.decks = state.overview.decks || [];
+  state.plugins = state.overview.plugins || [];
+  state.social = state.overview.social || null;
   await loadCommonPaths();
   applyI18n();
   applyTheme();
   renderDashboard();
   renderLibraries();
+  renderDecks();
   renderSettings();
 }
 
@@ -922,6 +1058,57 @@ function renderDashboard() {
       </div>
     `).join("")
     : `<p class="muted">${t("empty.noFuture")}</p>`;
+
+  renderAchievementPlugin();
+}
+
+function renderAchievementPlugin() {
+  const layout = $("#dashboardLayout");
+  const host = $("#dashboardPluginHost");
+  if (!layout || !host) return;
+
+  const achievement = state.overview?.achievements || { enabled: false, achievements: [], unlocked: 0, total: 0 };
+  if (!achievement.enabled) {
+    host.innerHTML = "";
+    layout.classList.add("no-achievements");
+    return;
+  }
+
+  layout.classList.remove("no-achievements");
+  host.innerHTML = `
+    <section class="panel achievements-panel" data-plugin-module="achievement_core">
+      <div class="panel-head">
+        <h3>${t("achievements.title")}</h3>
+        <button class="text-button" data-view-link="library">${t("actions.share")}</button>
+      </div>
+      <div id="achievementSummary" class="achievement-summary"></div>
+      <div id="achievementList" class="achievement-list"></div>
+    </section>
+  `;
+
+  const percent = achievement.total ? Math.round((achievement.unlocked / achievement.total) * 100) : 0;
+  const summary = $("#achievementSummary");
+  const list = $("#achievementList");
+  if (summary) {
+    const reward = achievement.reward || {};
+    summary.innerHTML = `
+      <strong>${t("achievements.progress", { unlocked: achievement.unlocked || 0, total: achievement.total || 0 })}</strong>
+      <span>${t("achievements.level", { level: reward.level || 1, title: reward.title || "", points: reward.points || 0 })}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, percent)}%"></div></div>
+    `;
+  }
+  if (list) {
+    list.innerHTML = (achievement.achievements || []).map((item) => `
+      <div class="achievement-row ${item.unlocked ? "unlocked" : ""}">
+        <span>${item.unlocked ? "✓" : Math.round((item.progress || 0) * 100) + "%"}</span>
+        <div>
+          <strong>${escapeHtml(item.title)}</strong>
+          <small>${escapeHtml(item.description)}</small>
+          <small>${escapeHtml(item.tier || "bronze")} · +${item.points || 0} XP · ${item.current || 0}/${item.target || 1}</small>
+        </div>
+      </div>
+    `).join("");
+  }
 }
 
 function renderLibraries() {
@@ -955,6 +1142,38 @@ function renderCommonPaths() {
   `).join("");
 }
 
+function renderDecks() {
+  const decks = state.decks || [];
+  const list = $("#deckList");
+  if (list) {
+    list.innerHTML = decks.length
+      ? decks.map((deck, index) => `
+        <div class="deck-item ${String(deck.id) === String(state.filters.deckId || "") ? "active" : ""}" data-deck-id="${deck.id}">
+          <span class="deck-dot" style="background:${escapeHtml(deck.color || "#2563eb")}"></span>
+          <div>
+            <strong>${index + 1}. ${escapeHtml(deck.name)}</strong>
+            <small>${deck.item_count || 0} ${t("labels.files")} · ${deck.due_count || 0} ${t("filters.due")}</small>
+          </div>
+          ${deck.is_default ? "" : `<button class="icon-button deck-delete" data-delete-deck="${deck.id}" title="Delete">×</button>`}
+        </div>
+      `).join("")
+      : `<p class="muted">${t("decks.all")}</p>`;
+  }
+  const select = $("#deckFilter");
+  if (select) {
+    const current = state.filters.deckId || "";
+    select.innerHTML = `<option value="">${t("decks.all")}</option>` + decks.map((deck) => (
+      `<option value="${deck.id}">${escapeHtml(deck.name)}</option>`
+    )).join("");
+    select.value = current;
+  }
+}
+
+function deckName(deckId) {
+  const deck = (state.decks || []).find((item) => String(item.id) === String(deckId));
+  return deck ? deck.name : t("decks.all");
+}
+
 async function loadTree(libraryId, rel = "") {
   try {
     const data = await api(`/api/tree?library_id=${libraryId}&rel=${encodeURIComponent(rel)}`);
@@ -985,6 +1204,7 @@ async function loadItems() {
     direction: state.filters.direction,
     page_size: "150",
   });
+  if (state.filters.deckId) params.set("deck_id", state.filters.deckId);
   const data = await api(`/api/items?${params.toString()}`);
   state.items = data.items || [];
   renderItems();
@@ -997,6 +1217,7 @@ function renderItems() {
     const tags = (item.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
     const tagHtml = tags.length ? tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("") : `<span class="muted">${t("labels.noTags")}</span>`;
     const missing = item.exists ? "" : `<span class="danger">${t("labels.fileMissing")}</span>`;
+    const deck = (state.decks || []).find((row) => row.id === item.deck_id);
     return `
       <tr data-item-id="${item.id}">
         <td class="check-cell"><input class="row-check" type="checkbox" data-id="${item.id}" ${checked}></td>
@@ -1007,6 +1228,7 @@ function renderItems() {
             <div class="tag-line">${tagHtml}</div>
           </div>
         </td>
+        <td><span class="deck-pill" style="border-color:${escapeHtml(deck?.color || "#d9e0ea")}">${escapeHtml(deck?.name || t("decks.all"))}</span></td>
         <td>${dayText(item.due_at)}</td>
         <td>${Math.round(item.retrievability * 100)}%</td>
         <td>${item.review_count}</td>
@@ -1022,7 +1244,7 @@ function renderItems() {
     `;
   }).join("");
   if (!state.items.length) {
-    body.innerHTML = `<tr><td colspan="7"><div class="empty-state friendly-empty">
+    body.innerHTML = `<tr><td colspan="8"><div class="empty-state friendly-empty">
       <strong>${t("empty.noItemsTitle")}</strong>
       <span>${t("empty.noItemsBody")}</span>
       <button class="primary-button" id="emptyTableAddLibraryBtn">${t("actions.addLibrary")}</button>
@@ -1032,7 +1254,7 @@ function renderItems() {
 
 async function chooseLibrary() {
   toast(t("toast.openingFolderPicker"));
-  const result = await api("/api/libraries/select", { method: "POST", body: {} });
+  const result = await api("/api/libraries/select", { method: "POST", body: { deck_id: state.filters.deckId || null } });
   if (result.cancelled) {
     toast(t("toast.cancelled"));
     return;
@@ -1052,8 +1274,21 @@ async function addLibraryPath(path) {
     toast(t("toast.pathRequired"), true);
     return;
   }
-  const result = await api("/api/libraries/add", { method: "POST", body: { path: rootPath } });
+  const result = await api("/api/libraries/add", { method: "POST", body: { path: rootPath, deck_id: state.filters.deckId || null } });
   toast(t("toast.scanDone", { added: result.scan.added, updated: result.scan.updated }));
+  await loadOverview();
+  await loadItems();
+}
+
+async function chooseFile() {
+  toast(t("toast.openingFolderPicker"));
+  const result = await api("/api/files/select", { method: "POST", body: { deck_id: state.filters.deckId || null } });
+  if (result.cancelled) {
+    toast(t("toast.cancelled"));
+    return;
+  }
+  const item = result.file?.item || {};
+  toast(t("toast.fileAdded", { name: item.file_name || result.file?.file_path || "" }));
   await loadOverview();
   await loadItems();
 }
@@ -1280,9 +1515,11 @@ async function exportSelectedNotes() {
     toast(t("toast.selectNotesFirst"), true);
     return;
   }
+  const targetDir = await chooseExportFolderForAction();
+  if (!targetDir) return;
   const result = await api("/api/notes/export", {
     method: "POST",
-    body: { ids, target_dir: getExportDir() },
+    body: { ids, target_dir: targetDir },
   });
   toast(t("toast.notesExported", { count: result.exported || 0, path: result.export_dir || "" }));
 }
@@ -1316,6 +1553,78 @@ async function batchTag() {
   await api("/api/items/update", { method: "POST", body: { ids, fields: { tags: value } } });
   toast(t("toast.tagUpdated", { count: ids.length }));
   await loadItems();
+}
+
+async function createDeck() {
+  const name = prompt(t("prompt.deckName"));
+  if (!name) return;
+  const description = prompt(t("prompt.deckDescription")) || "";
+  const result = await api("/api/decks/create", { method: "POST", body: { name, description } });
+  toast(t("toast.deckCreated", { name: result.deck?.name || name }));
+  await loadOverview();
+  state.filters.deckId = String(result.deck?.id || "");
+  renderDecks();
+  await loadItems();
+}
+
+function askDeckId() {
+  const decks = state.decks || [];
+  if (!decks.length) return "";
+  const menu = decks.map((deck, index) => `${index + 1}. ${deck.name}`).join("\n");
+  const answer = prompt(`${t("prompt.chooseDeck")}\n${menu}`);
+  if (answer === null) return null;
+  const index = Number(answer) - 1;
+  if (Number.isInteger(index) && decks[index]) return decks[index].id;
+  const matched = decks.find((deck) => String(deck.id) === String(answer) || deck.name === answer);
+  return matched ? matched.id : "";
+}
+
+async function batchAssignDeck() {
+  const ids = Array.from(state.selectedIds);
+  if (!ids.length) {
+    toast(t("toast.selectFirst"), true);
+    return;
+  }
+  const deckId = askDeckId();
+  if (!deckId) return;
+  await api("/api/items/update", { method: "POST", body: { ids, fields: { deck_id: Number(deckId) } } });
+  toast(t("toast.deckAssigned", { count: ids.length }));
+  state.selectedIds.clear();
+  await loadOverview();
+  await loadItems();
+}
+
+async function deleteDeck(deckId) {
+  const deck = (state.decks || []).find((item) => String(item.id) === String(deckId));
+  if (!deck || deck.is_default) return;
+  if (!confirm(t("confirm.deleteDeck", { name: deck.name }))) return;
+  await api("/api/decks/delete", { method: "POST", body: { id: Number(deckId) } });
+  if (String(state.filters.deckId) === String(deckId)) state.filters.deckId = "";
+  toast(t("toast.deckDeleted"));
+  await loadOverview();
+  await loadItems();
+}
+
+async function exportSharePackage() {
+  const ids = Array.from(state.selectedIds);
+  const includeFiles = confirm(t("confirm.includeFiles"));
+  const targetPath = await chooseSavePath({
+    defaultName: `LiFileReviewer_share_${stamp()}.zip`,
+    extension: ".zip",
+    fileTypes: ["Zip files (*.zip)", "All files (*.*)"],
+    title: t("dialog.exportShare"),
+  });
+  if (!targetPath) return;
+  const result = await api("/api/share/export", {
+    method: "POST",
+    body: {
+      ids,
+      deck_id: ids.length ? null : (state.filters.deckId || null),
+      include_files: includeFiles,
+      target_path: targetPath,
+    },
+  });
+  toast(t("toast.shareExported", { path: result.export_path }));
 }
 
 async function batchSuspend() {
@@ -1406,6 +1715,7 @@ function renderSettings() {
   $("#pointerPath").textContent = app.profile_pointer_path || "";
   $("#profileDirInput").value = app.app_dir || "";
   renderPlugins();
+  renderSocialProfile();
 }
 
 async function saveSettings() {
@@ -1452,6 +1762,48 @@ function getExportDir() {
   return ($("#exportDirInput")?.value || state.config?.exports?.default_dir || state.overview?.app?.export_dir || "").trim();
 }
 
+function stamp() {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+    "_",
+    pad(now.getHours()),
+    pad(now.getMinutes()),
+    pad(now.getSeconds()),
+  ].join("");
+}
+
+async function chooseSavePath({ defaultName, extension, fileTypes, title }) {
+  toast(t("toast.openingSavePicker"));
+  const result = await api("/api/export/save-as", {
+    method: "POST",
+    body: {
+      default_name: defaultName,
+      extension,
+      file_types: fileTypes,
+      title,
+      initial_dir: getExportDir(),
+    },
+  });
+  if (result.cancelled) {
+    toast(t("toast.cancelled"));
+    return "";
+  }
+  return result.path || "";
+}
+
+async function chooseExportFolderForAction() {
+  toast(t("toast.openingFolderPicker"));
+  const result = await api("/api/export/select-dir", { method: "POST", body: {} });
+  if (result.cancelled) {
+    toast(t("toast.cancelled"));
+    return "";
+  }
+  return result.path || "";
+}
+
 async function chooseExportDir() {
   toast(t("toast.openingFolderPicker"));
   const result = await api("/api/export/select-dir", { method: "POST", body: {} });
@@ -1477,12 +1829,26 @@ async function openExportDir() {
 }
 
 async function backup() {
-  const result = await api("/api/backup", { method: "POST", body: { target_dir: getExportDir() } });
+  const targetPath = await chooseSavePath({
+    defaultName: `review_data_manual_${stamp()}.sqlite`,
+    extension: ".sqlite",
+    fileTypes: ["SQLite database (*.sqlite)", "All files (*.*)"],
+    title: t("dialog.backupDb"),
+  });
+  if (!targetPath) return;
+  const result = await api("/api/backup", { method: "POST", body: { target_path: targetPath } });
   toast(t("toast.backupDone", { path: result.backup_path }));
 }
 
 async function exportProfile() {
-  const result = await api("/api/export-profile", { method: "POST", body: { target_dir: getExportDir() } });
+  const targetPath = await chooseSavePath({
+    defaultName: `LiFileReviewer2_profile_${stamp()}.zip`,
+    extension: ".zip",
+    fileTypes: ["Zip files (*.zip)", "All files (*.*)"],
+    title: t("dialog.exportProfile"),
+  });
+  if (!targetPath) return;
+  const result = await api("/api/export-profile", { method: "POST", body: { target_path: targetPath } });
   toast(t("toast.profileExported", { path: result.export_path }));
 }
 
@@ -1535,7 +1901,14 @@ async function importProfile() {
     toast(t("toast.pathRequired"), true);
     return;
   }
-  const result = await api("/api/profile/import", { method: "POST", body: { path } });
+  const backupTargetPath = await chooseSavePath({
+    defaultName: `LiFileReviewer2_before_import_${stamp()}.zip`,
+    extension: ".zip",
+    fileTypes: ["Zip files (*.zip)", "All files (*.*)"],
+    title: t("dialog.backupBeforeImport"),
+  });
+  if (!backupTargetPath) return;
+  const result = await api("/api/profile/import", { method: "POST", body: { path, backup_target_path: backupTargetPath } });
   toast(t("toast.profileImported", { path: result.backup_before_import }));
   await loadOverview();
   await loadItems();
@@ -1545,6 +1918,11 @@ async function importProfile() {
 async function openProfileFolder() {
   const appDir = state.overview?.app?.app_dir;
   if (appDir) await openFolderByPath(appDir);
+}
+
+async function openPluginsFolder() {
+  const pluginsDir = state.overview?.app?.plugins_dir;
+  if (pluginsDir) await openFolderByPath(pluginsDir);
 }
 
 async function loadPlugins() {
@@ -1557,6 +1935,18 @@ async function loadPlugins() {
   renderPlugins();
 }
 
+async function importPlugin(kind) {
+  const path = kind === "folder" ? "/api/plugins/import/select-folder" : "/api/plugins/import/select-file";
+  const result = await api(path, { method: "POST", body: { enable: true } });
+  if (result.cancelled) {
+    toast(t("toast.cancelled"));
+    return;
+  }
+  state.plugins = result.plugins || [];
+  toast(t("plugins.imported", { name: result.plugin?.name || result.plugin?.id || "" }));
+  await loadOverview();
+}
+
 function renderPlugins() {
   const target = $("#pluginsList");
   if (!target) return;
@@ -1564,12 +1954,144 @@ function renderPlugins() {
   target.innerHTML = plugins.length
     ? plugins.map((plugin) => `
       <div class="plugin-row">
-        <strong>${escapeHtml(plugin.name || plugin.id)}</strong>
-        <span>${escapeHtml(plugin.version || "")} ${plugin.has_manifest ? "manifest" : ""}</span>
-        <span>${escapeHtml(plugin.description || plugin.path || "")}</span>
+        <div class="plugin-main">
+          <strong>${escapeHtml(plugin.name || plugin.id)}</strong>
+          <span>${escapeHtml(plugin.version || "")} · ${escapeHtml(plugin.source || "external")} · ${escapeHtml(plugin.category || "")}</span>
+          <span>${escapeHtml(plugin.description || plugin.path || "")}</span>
+        </div>
+        <label class="switch-line">
+          <input type="checkbox" data-plugin-toggle="${escapeHtml(plugin.id)}" ${plugin.enabled ? "checked" : ""}>
+          <span>${plugin.enabled ? t("plugins.enabled") : t("plugins.disabled")}</span>
+        </label>
       </div>
     `).join("")
     : `<p class="muted">${t("plugins.empty")}</p>`;
+}
+
+function renderSocialProfile() {
+  const host = $("#settingsPluginHost");
+  if (!host) return;
+  const profile = state.social?.profile || state.config?.social || {};
+  const enabled = Boolean(state.social?.enabled);
+  if (!enabled) {
+    host.innerHTML = "";
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="social-box" data-plugin-module="social_profile">
+      <div class="panel-head compact-head">
+        <h4>${t("social.title")}</h4>
+        <button id="saveSocialBtn" class="text-button">${t("actions.save")}</button>
+      </div>
+      <div class="form-grid social-grid">
+        <label>
+          <span>${t("social.displayName")}</span>
+          <input id="socialDisplayNameInput" type="text">
+        </label>
+        <label>
+          <span>${t("social.handle")}</span>
+          <input id="socialHandleInput" type="text" placeholder="@your-name">
+        </label>
+        <label>
+          <span>${t("social.website")}</span>
+          <input id="socialWebsiteInput" type="text">
+        </label>
+        <label>
+          <span>${t("social.contact")}</span>
+          <input id="socialContactInput" type="text">
+        </label>
+        <label class="wide-label">
+          <span>${t("social.bio")}</span>
+          <textarea id="socialBioInput" rows="3"></textarea>
+        </label>
+        <label class="toggle-line">
+          <span>${t("social.shareStats")}</span>
+          <input id="socialShareStatsInput" type="checkbox">
+        </label>
+        <label class="toggle-line">
+          <span>${t("social.shareAchievements")}</span>
+          <input id="socialShareAchievementsInput" type="checkbox">
+        </label>
+        <label class="toggle-line">
+          <span>${t("social.friendDiscovery")}</span>
+          <input id="socialFriendDiscoveryInput" type="checkbox">
+        </label>
+      </div>
+      <div class="profile-actions">
+        <button id="copySocialCardBtn" class="secondary-button">${t("social.copyCard")}</button>
+      </div>
+      <div id="socialStatus" class="muted"></div>
+    </div>
+  `;
+
+  const fields = [
+    ["#socialDisplayNameInput", "display_name"],
+    ["#socialHandleInput", "handle"],
+    ["#socialWebsiteInput", "website"],
+    ["#socialContactInput", "contact"],
+    ["#socialBioInput", "bio"],
+  ];
+  fields.forEach(([selector, key]) => {
+    const node = $(selector);
+    if (node) {
+      node.value = profile[key] || "";
+      node.disabled = !enabled;
+    }
+  });
+  [
+    ["#socialShareStatsInput", "share_stats"],
+    ["#socialShareAchievementsInput", "share_achievements"],
+    ["#socialFriendDiscoveryInput", "allow_friend_discovery"],
+  ].forEach(([selector, key]) => {
+    const node = $(selector);
+    if (node) {
+      node.checked = Boolean(profile[key]);
+      node.disabled = !enabled;
+    }
+  });
+  const save = $("#saveSocialBtn");
+  const copy = $("#copySocialCardBtn");
+  if (save) save.addEventListener("click", saveSocialProfile);
+  if (copy) copy.addEventListener("click", copySocialCard);
+  const status = $("#socialStatus");
+  if (status) status.textContent = t("social.enabledHint");
+}
+
+async function togglePlugin(pluginId, enabled) {
+  const result = await api("/api/plugins/toggle", { method: "POST", body: { id: pluginId, enabled } });
+  state.plugins = result.plugins || [];
+  toast(enabled ? t("plugins.enabledToast") : t("plugins.disabledToast"));
+  await loadOverview();
+}
+
+async function saveSocialProfile() {
+  const profile = {
+    display_name: $("#socialDisplayNameInput")?.value.trim() || "",
+    handle: $("#socialHandleInput")?.value.trim() || "",
+    website: $("#socialWebsiteInput")?.value.trim() || "",
+    contact: $("#socialContactInput")?.value.trim() || "",
+    bio: $("#socialBioInput")?.value.trim() || "",
+    share_stats: Boolean($("#socialShareStatsInput")?.checked),
+    share_achievements: Boolean($("#socialShareAchievementsInput")?.checked),
+    allow_friend_discovery: Boolean($("#socialFriendDiscoveryInput")?.checked),
+  };
+  const result = await api("/api/social/profile", { method: "POST", body: { profile } });
+  state.social = result;
+  state.config.social = result.profile || profile;
+  renderSocialProfile();
+  toast(t("social.saved"));
+}
+
+async function copySocialCard() {
+  const result = await api("/api/social/card");
+  const text = JSON.stringify(result, null, 2);
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    window.prompt(t("social.copyFallback"), text);
+  }
+  toast(t("social.cardCopied"));
 }
 
 async function healthCheck() {
@@ -1592,12 +2114,26 @@ function renderHealth(result) {
 }
 
 async function exportCsv() {
-  const result = await api("/api/export", { method: "POST", body: { target_dir: getExportDir() } });
+  const targetPath = await chooseSavePath({
+    defaultName: `review_items_${stamp()}.csv`,
+    extension: ".csv",
+    fileTypes: ["CSV files (*.csv)", "All files (*.*)"],
+    title: t("dialog.exportCsv"),
+  });
+  if (!targetPath) return;
+  const result = await api("/api/export", { method: "POST", body: { target_path: targetPath } });
   toast(t("toast.exported", { path: result.export_path }));
 }
 
 async function exportPortableJson() {
-  const result = await api("/api/export-portable", { method: "POST", body: { target_dir: getExportDir() } });
+  const targetPath = await chooseSavePath({
+    defaultName: `review_portable_${stamp()}.json`,
+    extension: ".json",
+    fileTypes: ["JSON files (*.json)", "All files (*.*)"],
+    title: t("dialog.exportJson"),
+  });
+  if (!targetPath) return;
+  const result = await api("/api/export-portable", { method: "POST", body: { target_path: targetPath } });
   toast(t("toast.exportedJson", { path: result.export_path }));
 }
 
@@ -1695,6 +2231,21 @@ function bindEvents() {
         renderLibraries();
       }
 
+      const deckDelete = event.target.closest("[data-delete-deck]");
+      if (deckDelete) {
+        event.stopPropagation();
+        await deleteDeck(deckDelete.dataset.deleteDeck);
+        return;
+      }
+
+      const deck = event.target.closest("[data-deck-id]");
+      if (deck) {
+        state.filters.deckId = String(deck.dataset.deckId || "");
+        $("#deckFilter").value = state.filters.deckId;
+        renderDecks();
+        await loadItems();
+      }
+
       const tree = event.target.closest("[data-tree-rel]");
       if (tree) {
         const isDir = tree.dataset.isDir === "true" || tree.classList.contains("dir");
@@ -1713,6 +2264,11 @@ function bindEvents() {
       if (commonPath) {
         $("#manualLibraryPath").value = commonPath.dataset.commonPath || "";
       }
+
+      const pluginToggle = event.target.closest("[data-plugin-toggle]");
+      if (pluginToggle) {
+        await togglePlugin(pluginToggle.dataset.pluginToggle, pluginToggle.checked);
+      }
     } catch (error) {
       reportError(error);
     }
@@ -1720,6 +2276,14 @@ function bindEvents() {
 
   $("#chooseLibraryBtn").addEventListener("click", chooseLibrary);
   $("#chooseLibraryBtn2").addEventListener("click", chooseLibrary);
+  $("#chooseFileBtn").addEventListener("click", chooseFile);
+  $("#chooseFileBtn2").addEventListener("click", chooseFile);
+  $("#newDeckBtn").addEventListener("click", createDeck);
+  $("#clearDeckFilterBtn").addEventListener("click", async () => {
+    state.filters.deckId = "";
+    renderDecks();
+    await loadItems();
+  });
   $("#manualLibraryForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     await addLibraryPath($("#manualLibraryPath").value);
@@ -1761,13 +2325,18 @@ function bindEvents() {
   $("#importProfileBtn").addEventListener("click", importProfile);
   $("#openProfileBtn").addEventListener("click", openProfileFolder);
   $("#refreshPluginsBtn").addEventListener("click", loadPlugins);
+  $("#importPluginZipBtn").addEventListener("click", () => importPlugin("zip"));
+  $("#importPluginFolderBtn").addEventListener("click", () => importPlugin("folder"));
+  $("#openPluginsFolderBtn").addEventListener("click", openPluginsFolder);
   $("#exportBtn").addEventListener("click", exportCsv);
   $("#batchTagBtn").addEventListener("click", batchTag);
+  $("#batchDeckBtn").addEventListener("click", batchAssignDeck);
   $("#batchSuspendBtn").addEventListener("click", batchSuspend);
   $("#batchActivateBtn").addEventListener("click", () => batchSetStatus("active", t("batch.activateShort")));
   $("#batchDoneBtn").addEventListener("click", () => batchSetStatus("done", t("batch.doneShort")));
   $("#batchDueTodayBtn").addEventListener("click", batchDueToday);
   $("#batchDeleteBtn").addEventListener("click", batchDelete);
+  $("#shareBtn").addEventListener("click", exportSharePackage);
   $("#languageSelect").addEventListener("change", async (event) => {
     state.lang = event.target.value;
     localStorage.setItem("fileReviewerLanguage", state.lang);
@@ -1777,6 +2346,7 @@ function bindEvents() {
     setView(state.view);
     renderDashboard();
     renderLibraries();
+    renderDecks();
     renderItems();
   });
   $("#onboardingCloseBtn").addEventListener("click", closeOnboarding);
@@ -1800,6 +2370,12 @@ function bindEvents() {
 
   $("#statusFilter").addEventListener("change", (event) => {
     state.filters.status = event.target.value;
+    loadItems();
+  });
+
+  $("#deckFilter").addEventListener("change", (event) => {
+    state.filters.deckId = event.target.value;
+    renderDecks();
     loadItems();
   });
 

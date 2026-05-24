@@ -25,8 +25,8 @@ from pathlib import Path
 
 
 APP_NAME = "智能文件复习系统 2.0 WebUI"
-APP_VERSION = "2.7.0"
-SCHEMA_VERSION = 3
+APP_VERSION = "2.12.0"
+SCHEMA_VERSION = 6
 DEFAULT_PORT = 8765
 WEBVIEW_WINDOW = None
 
@@ -191,6 +191,22 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "auto_load": False,
         "installed": [],
+        "achievement_plugins_enabled": True,
+        "core": {
+            "achievement_core": True,
+            "social_profile": True,
+        },
+    },
+    "social": {
+        "display_name": "",
+        "handle": "",
+        "bio": "",
+        "location": "",
+        "website": "",
+        "contact": "",
+        "share_stats": True,
+        "share_achievements": True,
+        "allow_friend_discovery": False,
     },
 }
 
@@ -256,6 +272,23 @@ def normalize_config(config: dict) -> tuple[dict, bool]:
         review["auto_open_file"] = False
         review["external_open_on_review_start"] = False
         changed = True
+    plugins = config.setdefault("plugins", {})
+    if "achievement_plugins_enabled" in plugins and "core" not in plugins:
+        plugins["core"] = {
+            "achievement_core": bool(plugins.get("achievement_plugins_enabled", True)),
+            "social_profile": True,
+        }
+        changed = True
+    core_plugins = plugins.setdefault("core", {})
+    for plugin_id, default_enabled in {"achievement_core": True, "social_profile": True}.items():
+        if plugin_id not in core_plugins:
+            core_plugins[plugin_id] = default_enabled
+            changed = True
+    social = config.setdefault("social", {})
+    for key, value in DEFAULT_CONFIG["social"].items():
+        if key not in social:
+            social[key] = value
+            changed = True
     if config.get("version") != APP_VERSION:
         config["version"] = APP_VERSION
         changed = True
@@ -354,6 +387,46 @@ def ensure_export_dir(config: dict | None = None, target_dir: str | Path | None 
     return target
 
 
+CORE_PLUGINS = {
+    "achievement_core": {
+        "id": "achievement_core",
+        "name": "成就系统",
+        "version": "1.0.0",
+        "category": "achievement",
+        "description": "把 XP、等级、成就奖励和外部成就包作为可开关插件管理。",
+        "builtin": True,
+    },
+    "social_profile": {
+        "id": "social_profile",
+        "name": "社交资料",
+        "version": "0.1.0",
+        "category": "social",
+        "description": "保存用户昵称、简介、主页和分享偏好，为好友、动态、协作学习等社交扩展预留接口。",
+        "builtin": True,
+    },
+}
+
+
+def plugin_enabled(plugin_id: str, config: dict | None = None) -> bool:
+    config = config or load_config()
+    plugins = config.get("plugins", {})
+    if not plugins.get("enabled", True):
+        return False
+    core = plugins.get("core", {})
+    if plugin_id in CORE_PLUGINS:
+        return bool(core.get(plugin_id, True))
+    installed = plugins.get("installed", {})
+    if isinstance(installed, dict) and plugin_id in installed:
+        return bool(installed.get(plugin_id))
+    return True
+
+
+def plugin_slug(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(value).strip())
+    cleaned = cleaned.strip("._-")
+    return cleaned[:80] or f"plugin_{uuid.uuid4().hex[:8]}"
+
+
 def iso_now() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
 
@@ -436,6 +509,16 @@ def backup_sqlite_database_to(source: Path, target_dir: Path, reason: str = "man
     safe_reason = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in reason)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     target = target_dir / f"{source.stem}_{safe_reason}_{stamp}{source.suffix}"
+    snapshot_sqlite_database(source, target)
+    if target_dir.resolve() == BACKUP_DIR.resolve():
+        rotate_backups()
+    return target
+
+
+def snapshot_sqlite_database(source: Path, target: Path) -> Path:
+    ensure_dir(target.parent)
+    if not path_exists(source):
+        raise FileNotFoundError(f"无法备份，数据库不存在：{source}")
     src = sqlite3.connect(fs_path(source))
     try:
         dst = sqlite3.connect(fs_path(target))
@@ -445,8 +528,6 @@ def backup_sqlite_database_to(source: Path, target_dir: Path, reason: str = "man
             dst.close()
     finally:
         src.close()
-    if target_dir.resolve() == BACKUP_DIR.resolve():
-        rotate_backups()
     return target
 
 
@@ -463,6 +544,28 @@ def rotate_backups() -> None:
             log_error(f"旧备份清理失败：{old}")
 
 
+def record_activity(
+    event_type: str,
+    amount: int = 1,
+    metadata: dict | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    payload = json.dumps(metadata or {}, ensure_ascii=False)
+    values = (event_type, int(amount or 1), payload, iso_now())
+    if conn is not None:
+        conn.execute(
+            "INSERT INTO activity_events(event_type, amount, metadata, created_at) VALUES(?, ?, ?, ?)",
+            values,
+        )
+        return
+    with get_conn() as local_conn:
+        local_conn.execute(
+            "INSERT INTO activity_events(event_type, amount, metadata, created_at) VALUES(?, ?, ?, ?)",
+            values,
+        )
+        local_conn.commit()
+
+
 def record_migration(conn: sqlite3.Connection, from_version: int, to_version: int, note: str) -> None:
     conn.execute(
         """
@@ -471,6 +574,25 @@ def record_migration(conn: sqlite3.Connection, from_version: int, to_version: in
         """,
         (from_version, to_version, APP_VERSION, iso_now(), note),
     )
+
+
+def ensure_default_deck(conn: sqlite3.Connection) -> int:
+    now = iso_now()
+    row = conn.execute("SELECT id FROM decks WHERE is_default=1 ORDER BY id LIMIT 1").fetchone()
+    if row:
+        return int(row["id"])
+    row = conn.execute("SELECT id FROM decks WHERE name=?", ("默认",)).fetchone()
+    if row:
+        conn.execute("UPDATE decks SET is_default=1, updated_at=? WHERE id=?", (now, row["id"]))
+        return int(row["id"])
+    cur = conn.execute(
+        """
+        INSERT INTO decks(name, description, color, is_default, sort_order, created_at, updated_at)
+        VALUES(?, ?, ?, 1, 0, ?, ?)
+        """,
+        ("默认", "默认复习卡组", "#2563eb", now, now),
+    )
+    return int(cur.lastrowid)
 
 
 def init_db(db_path: Path | None = None) -> None:
@@ -510,10 +632,22 @@ def init_db(db_path: Path | None = None) -> None:
                 file_count INTEGER DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS decks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT DEFAULT '',
+                color TEXT DEFAULT '#2563eb',
+                is_default INTEGER DEFAULT 0,
+                sort_order INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 guid TEXT NOT NULL UNIQUE,
                 library_id INTEGER,
+                deck_id INTEGER,
                 root_path TEXT,
                 relative_path TEXT,
                 file_path TEXT NOT NULL UNIQUE,
@@ -539,7 +673,8 @@ def init_db(db_path: Path | None = None) -> None:
                 total_read_seconds INTEGER DEFAULT 0,
                 last_review_at TEXT,
                 pinned INTEGER DEFAULT 0,
-                FOREIGN KEY(library_id) REFERENCES libraries(id) ON DELETE SET NULL
+                FOREIGN KEY(library_id) REFERENCES libraries(id) ON DELETE SET NULL,
+                FOREIGN KEY(deck_id) REFERENCES decks(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS review_sessions (
@@ -580,16 +715,39 @@ def init_db(db_path: Path | None = None) -> None:
                 FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE SET NULL
             );
 
-            CREATE INDEX IF NOT EXISTS idx_items_due ON items(status, due_at);
-            CREATE INDEX IF NOT EXISTS idx_items_file_name ON items(file_name);
-            CREATE INDEX IF NOT EXISTS idx_items_library ON items(library_id);
-            CREATE INDEX IF NOT EXISTS idx_history_item ON review_history(item_id, ended_at);
-            CREATE INDEX IF NOT EXISTS idx_notes_item ON notes(item_id, updated_at);
+            CREATE TABLE IF NOT EXISTS achievements (
+                id TEXT PRIMARY KEY,
+                unlocked_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                amount INTEGER DEFAULT 1,
+                metadata TEXT DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS social_profile (
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                display_name TEXT DEFAULT '',
+                handle TEXT DEFAULT '',
+                bio TEXT DEFAULT '',
+                location TEXT DEFAULT '',
+                website TEXT DEFAULT '',
+                contact TEXT DEFAULT '',
+                share_stats INTEGER DEFAULT 1,
+                share_achievements INTEGER DEFAULT 1,
+                allow_friend_discovery INTEGER DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
+
             """
         )
         migrations = [
             ("items", "guid", "TEXT"),
             ("items", "library_id", "INTEGER"),
+            ("items", "deck_id", "INTEGER"),
             ("items", "root_path", "TEXT"),
             ("items", "relative_path", "TEXT"),
             ("items", "priority", "INTEGER DEFAULT 0"),
@@ -602,6 +760,19 @@ def init_db(db_path: Path | None = None) -> None:
         ]
         for table, column, definition in migrations:
             ensure_column(conn, table, column, definition)
+        default_deck_id = ensure_default_deck(conn)
+        conn.execute("UPDATE items SET deck_id=? WHERE deck_id IS NULL", (default_deck_id,))
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_items_due ON items(status, due_at);
+            CREATE INDEX IF NOT EXISTS idx_items_file_name ON items(file_name);
+            CREATE INDEX IF NOT EXISTS idx_items_library ON items(library_id);
+            CREATE INDEX IF NOT EXISTS idx_items_deck ON items(deck_id);
+            CREATE INDEX IF NOT EXISTS idx_history_item ON review_history(item_id, ended_at);
+            CREATE INDEX IF NOT EXISTS idx_notes_item ON notes(item_id, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_activity_type ON activity_events(event_type, created_at);
+            """
+        )
         current_version = db_user_version(conn)
         if current_version < 1:
             record_migration(conn, current_version, 1, "初始化 2.0 基础数据结构")
@@ -612,6 +783,15 @@ def init_db(db_path: Path | None = None) -> None:
         if current_version < 3:
             record_migration(conn, current_version, 3, "加入本地 Markdown 笔记与复习资料关联")
             current_version = 3
+        if current_version < 4:
+            record_migration(conn, current_version, 4, "Add decks, single-file items, achievements, and share packages")
+            current_version = 4
+        if current_version < 5:
+            record_migration(conn, current_version, 5, "Add activity events for plugin achievement rewards")
+            current_version = 5
+        if current_version < 6:
+            record_migration(conn, current_version, 6, "Add plugin-managed social profile foundation")
+            current_version = 6
         set_db_user_version(conn, SCHEMA_VERSION)
         conn.execute(
             """
@@ -724,6 +904,122 @@ def note_row_to_dict(row: sqlite3.Row) -> dict:
     }
 
 
+def deck_row_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "description": row["description"] or "",
+        "color": row["color"] or "#2563eb",
+        "is_default": bool(row["is_default"]),
+        "sort_order": int(row["sort_order"] or 0),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "item_count": int(row["item_count"] or 0) if "item_count" in row.keys() else 0,
+        "due_count": int(row["due_count"] or 0) if "due_count" in row.keys() else 0,
+    }
+
+
+def list_decks() -> dict:
+    with get_conn() as conn:
+        ensure_default_deck(conn)
+        rows = conn.execute(
+            """
+            SELECT d.*,
+                   COUNT(i.id) AS item_count,
+                   SUM(CASE WHEN i.status='active' AND i.due_at<=? THEN 1 ELSE 0 END) AS due_count
+              FROM decks d
+              LEFT JOIN items i ON i.deck_id=d.id
+             GROUP BY d.id
+             ORDER BY d.is_default DESC, d.sort_order ASC, d.name COLLATE NOCASE ASC
+            """,
+            (iso_now(),),
+        ).fetchall()
+        conn.commit()
+    return {"decks": [deck_row_to_dict(row) for row in rows]}
+
+
+def clean_deck_name(value: str) -> str:
+    name = " ".join(str(value or "").strip().split())
+    if not name:
+        raise ValueError("Deck name is required")
+    return name[:80]
+
+
+def clean_hex_color(value: str | None) -> str:
+    color = str(value or "#2563eb").strip()
+    if len(color) == 7 and color.startswith("#") and all(ch in "0123456789abcdefABCDEF" for ch in color[1:]):
+        return color
+    return "#2563eb"
+
+
+def create_deck(payload: dict) -> dict:
+    now = iso_now()
+    name = clean_deck_name(payload.get("name"))
+    description = str(payload.get("description") or "").strip()[:500]
+    color = clean_hex_color(payload.get("color"))
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO decks(name, description, color, is_default, sort_order, created_at, updated_at)
+            VALUES(?, ?, ?, 0, COALESCE((SELECT MAX(sort_order)+1 FROM decks), 1), ?, ?)
+            """,
+            (name, description, color, now, now),
+        )
+        record_activity("create_deck", conn=conn)
+        conn.commit()
+        row = conn.execute("SELECT *, 0 AS item_count, 0 AS due_count FROM decks WHERE id=?", (cur.lastrowid,)).fetchone()
+    return {"deck": deck_row_to_dict(row)}
+
+
+def update_deck(payload: dict) -> dict:
+    deck_id = int(payload.get("id") or 0)
+    if deck_id <= 0:
+        raise ValueError("Deck id is required")
+    fields = []
+    values = []
+    if "name" in payload:
+        fields.append("name=?")
+        values.append(clean_deck_name(payload.get("name")))
+    if "description" in payload:
+        fields.append("description=?")
+        values.append(str(payload.get("description") or "").strip()[:500])
+    if "color" in payload:
+        fields.append("color=?")
+        values.append(clean_hex_color(payload.get("color")))
+    if "sort_order" in payload:
+        fields.append("sort_order=?")
+        values.append(int(payload.get("sort_order") or 0))
+    if not fields:
+        return {"updated": 0}
+    fields.append("updated_at=?")
+    values.append(iso_now())
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM decks WHERE id=?", (deck_id,)).fetchone()
+        if not row:
+            raise ValueError("Deck not found")
+        conn.execute(f"UPDATE decks SET {', '.join(fields)} WHERE id=?", values + [deck_id])
+        conn.commit()
+        updated = conn.execute("SELECT *, 0 AS item_count, 0 AS due_count FROM decks WHERE id=?", (deck_id,)).fetchone()
+    return {"updated": 1, "deck": deck_row_to_dict(updated)}
+
+
+def delete_deck(payload: dict) -> dict:
+    deck_id = int(payload.get("id") or 0)
+    if deck_id <= 0:
+        raise ValueError("Deck id is required")
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM decks WHERE id=?", (deck_id,)).fetchone()
+        if not row:
+            raise ValueError("Deck not found")
+        if int(row["is_default"] or 0):
+            raise ValueError("Default deck cannot be deleted")
+        default_deck_id = ensure_default_deck(conn)
+        conn.execute("UPDATE items SET deck_id=?, updated_at=? WHERE deck_id=?", (default_deck_id, iso_now(), deck_id))
+        cur = conn.execute("DELETE FROM decks WHERE id=?", (deck_id,))
+        conn.commit()
+    return {"deleted": cur.rowcount, "moved_to_deck_id": default_deck_id}
+
+
 def ensure_library(conn: sqlite3.Connection, root_path: str) -> int:
     now = iso_now()
     display_name = Path(root_path).name or root_path
@@ -737,54 +1033,82 @@ def ensure_library(conn: sqlite3.Connection, root_path: str) -> int:
     return int(cur.lastrowid)
 
 
-def upsert_item(conn: sqlite3.Connection, file_path: Path, root_path: str, library_id: int) -> str:
+def upsert_item(
+    conn: sqlite3.Connection,
+    file_path: Path,
+    root_path: str | None = None,
+    library_id: int | None = None,
+    deck_id: int | None = None,
+    tags: str | None = None,
+) -> str:
     now = iso_now()
+    file_path = Path(file_path).expanduser().resolve()
+    root = Path(root_path).expanduser().resolve() if root_path else file_path.parent
+    default_deck_id = ensure_default_deck(conn)
+    requested_deck_id = int(deck_id) if deck_id else None
+    new_item_deck_id = requested_deck_id or default_deck_id
     try:
         stat = path_stat(file_path)
     except OSError:
         return "skipped"
     try:
-        relative = str(file_path.relative_to(Path(root_path)))
+        relative = str(file_path.relative_to(root))
     except ValueError:
         relative = file_path.name
     modified_at = datetime.fromtimestamp(stat.st_mtime).replace(microsecond=0).isoformat()
     due_at = now if load_config()["scheduler"].get("new_item_due_immediately", True) else (
         datetime.now() + timedelta(days=1)
     ).replace(microsecond=0).isoformat()
-    existing = conn.execute("SELECT id FROM items WHERE file_path=?", (str(file_path),)).fetchone()
+    existing = conn.execute("SELECT * FROM items WHERE file_path=?", (str(file_path),)).fetchone()
     if existing:
+        update_library_id = library_id if library_id is not None else existing["library_id"]
+        update_root = str(root) if library_id is not None or not existing["root_path"] else existing["root_path"]
+        update_relative = relative if library_id is not None or not existing["relative_path"] else existing["relative_path"]
+        update_deck_id = requested_deck_id or existing["deck_id"] or default_deck_id
+        assignments = [
+            "library_id=?",
+            "root_path=?",
+            "relative_path=?",
+            "file_name=?",
+            "ext=?",
+            "size_bytes=?",
+            "modified_at=?",
+            "updated_at=?",
+            "last_seen_at=?",
+            "deck_id=?",
+        ]
+        values: list = [
+            update_library_id,
+            update_root,
+            update_relative,
+            file_path.name,
+            file_path.suffix.lower(),
+            int(stat.st_size),
+            modified_at,
+            now,
+            now,
+            update_deck_id,
+        ]
+        if tags is not None:
+            assignments.append("tags=?")
+            values.append(tags)
+        values.append(existing["id"])
         conn.execute(
-            """
-            UPDATE items
-               SET library_id=?, root_path=?, relative_path=?, file_name=?, ext=?,
-                   size_bytes=?, modified_at=?, updated_at=?, last_seen_at=?
-             WHERE id=?
-            """,
-            (
-                library_id,
-                root_path,
-                relative,
-                file_path.name,
-                file_path.suffix.lower(),
-                int(stat.st_size),
-                modified_at,
-                now,
-                now,
-                existing["id"],
-            ),
+            f"UPDATE items SET {', '.join(assignments)} WHERE id=?",
+            values,
         )
         return "updated"
     conn.execute(
         """
         INSERT INTO items(
             guid, library_id, root_path, relative_path, file_path, file_name, ext,
-            size_bytes, modified_at, added_at, updated_at, last_seen_at, due_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            size_bytes, modified_at, added_at, updated_at, last_seen_at, due_at, deck_id, tags
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             str(uuid.uuid4()),
             library_id,
-            root_path,
+            str(root),
             relative,
             str(file_path),
             file_path.name,
@@ -795,12 +1119,14 @@ def upsert_item(conn: sqlite3.Connection, file_path: Path, root_path: str, libra
             now,
             now,
             due_at,
+            new_item_deck_id,
+            tags or "",
         ),
     )
     return "added"
 
 
-def scan_library(root_path: str, config: dict | None = None) -> dict:
+def scan_library(root_path: str, config: dict | None = None, deck_id: int | None = None, tags: str | None = None) -> dict:
     config = config or load_config()
     root = Path(root_path).expanduser().resolve()
     if not path_exists(root) or not path_is_dir(root):
@@ -826,7 +1152,7 @@ def scan_library(root_path: str, config: dict | None = None) -> dict:
                 if not valid_file_ext(file_path, config):
                     skipped += 1
                     continue
-                result = upsert_item(conn, file_path, str(root), library_id)
+                result = upsert_item(conn, file_path, str(root), library_id, deck_id=deck_id, tags=tags)
                 scanned += 1
                 if result == "added":
                     added += 1
@@ -838,6 +1164,10 @@ def scan_library(root_path: str, config: dict | None = None) -> dict:
             "UPDATE libraries SET last_scan_at=?, file_count=(SELECT COUNT(*) FROM items WHERE library_id=?) WHERE id=?",
             (iso_now(), library_id, library_id),
         )
+        if added:
+            record_activity("add_item", added, {"source": "library", "root_path": str(root)}, conn)
+        if scanned:
+            record_activity("scan_library", scanned, {"root_path": str(root)}, conn)
         conn.commit()
     config_roots = [normalize_path(p) for p in config.get("library_roots", [])]
     if str(root) not in config_roots:
@@ -845,11 +1175,25 @@ def scan_library(root_path: str, config: dict | None = None) -> dict:
         save_config(config)
     return {
         "root_path": str(root),
+        "deck_id": deck_id,
         "added": added,
         "updated": updated,
         "skipped": skipped,
         "scanned": scanned,
     }
+
+
+def add_single_file(file_path: str, deck_id: int | None = None, tags: str | None = None) -> dict:
+    path = Path(file_path).expanduser().resolve()
+    if not path_exists(path) or not path_is_file(path):
+        raise ValueError(f"File does not exist: {path}")
+    with get_conn() as conn:
+        result = upsert_item(conn, path, path.parent, None, deck_id=deck_id, tags=tags)
+        if result == "added":
+            record_activity("add_item", 1, {"source": "single_file", "file_path": str(path)}, conn)
+        conn.commit()
+        row = conn.execute("SELECT * FROM items WHERE file_path=?", (str(path),)).fetchone()
+    return {"file_path": str(path), "result": result, "item": row_item(row)}
 
 
 def current_retrievability(row: sqlite3.Row, now: datetime | None = None) -> float:
@@ -991,6 +1335,7 @@ def row_item(row: sqlite3.Row) -> dict:
         "id": row["id"],
         "guid": row["guid"],
         "library_id": row["library_id"],
+        "deck_id": row["deck_id"],
         "root_path": row["root_path"],
         "relative_path": row["relative_path"],
         "file_path": row["file_path"],
@@ -1066,6 +1411,18 @@ def get_overview() -> dict:
             """
         ).fetchall()
         libraries = conn.execute("SELECT * FROM libraries ORDER BY display_name ASC").fetchall()
+        deck_rows = conn.execute(
+            """
+            SELECT d.*,
+                   COUNT(i.id) AS item_count,
+                   SUM(CASE WHEN i.status='active' AND i.due_at<=? THEN 1 ELSE 0 END) AS due_count
+              FROM decks d
+              LEFT JOIN items i ON i.deck_id=d.id
+             GROUP BY d.id
+             ORDER BY d.is_default DESC, d.sort_order ASC, d.name COLLATE NOCASE ASC
+            """,
+            (now,),
+        ).fetchall()
         history_dates = [
             row["day"]
             for row in conn.execute(
@@ -1088,7 +1445,11 @@ def get_overview() -> dict:
         "due_items": [row_item(row) for row in due_rows],
         "future_due": [dict(row) for row in future],
         "libraries": [dict(row) for row in libraries],
+        "decks": [deck_row_to_dict(row) for row in deck_rows],
+        "achievements": achievement_summary(),
         "config": load_config(),
+        "plugins": list_plugins()["plugins"],
+        "social": get_social_profile(),
         "now": now,
     }
 
@@ -1099,6 +1460,7 @@ def query_items(params: dict) -> dict:
     due = (params.get("due") or ["all"])[0]
     tag = (params.get("tag") or [""])[0].strip()
     library_id = (params.get("library_id") or [""])[0].strip()
+    deck_id = (params.get("deck_id") or [""])[0].strip()
     page = max(1, int((params.get("page") or ["1"])[0]))
     page_size = min(500, max(10, int((params.get("page_size") or ["80"])[0])))
     sort = (params.get("sort") or ["due_at"])[0]
@@ -1128,6 +1490,9 @@ def query_items(params: dict) -> dict:
     if library_id:
         clauses.append("library_id=?")
         values.append(library_id)
+    if deck_id:
+        clauses.append("deck_id=?")
+        values.append(deck_id)
     if search:
         clauses.append("(file_name LIKE ? OR file_path LIKE ? OR tags LIKE ? OR notes LIKE ?)")
         values.extend([f"%{search}%"] * 4)
@@ -1177,7 +1542,26 @@ def choose_folder_dialog() -> str:
     return selected
 
 
-def choose_file_dialog(file_types: tuple[str, ...] = ("All files (*.*)",)) -> str:
+def tk_filetypes(file_types: tuple[str, ...]) -> list[tuple[str, str]]:
+    parsed = []
+    for item in file_types:
+        text = str(item)
+        if "(" in text and ")" in text:
+            label = text.split("(", 1)[0].strip() or text
+            pattern = text.rsplit("(", 1)[1].split(")", 1)[0].strip() or "*.*"
+            parsed.append((label, pattern))
+        else:
+            parsed.append((text, "*.*"))
+    return parsed or [("All files", "*.*")]
+
+
+def normalize_dialog_result(result) -> str:
+    if isinstance(result, (list, tuple)):
+        return str(result[0]) if result else ""
+    return str(result or "")
+
+
+def choose_file_dialog(file_types: tuple[str, ...] = ("All files (*.*)",), title: str = "选择文件") -> str:
     global WEBVIEW_WINDOW
     if WEBVIEW_WINDOW is not None:
         try:
@@ -1192,9 +1576,7 @@ def choose_file_dialog(file_types: tuple[str, ...] = ("All files (*.*)",)) -> st
                 allow_multiple=False,
                 file_types=file_types,
             )
-            if isinstance(result, (list, tuple)):
-                return str(result[0]) if result else ""
-            return str(result or "")
+            return normalize_dialog_result(result)
         except Exception:
             log_error("WebView 文件选择失败，尝试 Tk 回退：\n" + traceback.format_exc())
 
@@ -1204,9 +1586,69 @@ def choose_file_dialog(file_types: tuple[str, ...] = ("All files (*.*)",)) -> st
     root.withdraw()
     root.attributes("-topmost", True)
     root.update()
-    selected = filedialog.askopenfilename(title="选择迁移包", filetypes=[("Zip files", "*.zip"), ("All files", "*.*")])
+    selected = filedialog.askopenfilename(title=title, filetypes=tk_filetypes(file_types))
     root.destroy()
     return selected
+
+
+def choose_save_file_dialog(
+    default_name: str,
+    file_types: tuple[str, ...] = ("All files (*.*)",),
+    title: str = "保存文件",
+    initial_dir: str | Path | None = None,
+) -> str:
+    global WEBVIEW_WINDOW
+    directory = str(Path(initial_dir).expanduser().resolve()) if initial_dir else str(export_dir())
+    if WEBVIEW_WINDOW is not None:
+        try:
+            import webview
+
+            dialog_type = getattr(getattr(webview, "FileDialog", None), "SAVE", None)
+            if dialog_type is None:
+                dialog_type = getattr(webview, "SAVE_DIALOG", 30)
+            result = WEBVIEW_WINDOW.create_file_dialog(
+                dialog_type=dialog_type,
+                directory=directory,
+                allow_multiple=False,
+                save_filename=default_name,
+                file_types=file_types,
+            )
+            return normalize_dialog_result(result)
+        except Exception:
+            log_error("WebView 保存位置选择失败，尝试 Tk 回退：\n" + traceback.format_exc())
+
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update()
+    selected = filedialog.asksaveasfilename(
+        title=title,
+        initialdir=directory,
+        initialfile=default_name,
+        filetypes=tk_filetypes(file_types),
+    )
+    root.destroy()
+    return selected
+
+
+def timestamped_name(prefix: str, suffix: str) -> str:
+    return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{suffix}"
+
+
+def resolve_output_file(
+    target_path: str | Path | None,
+    target_dir: str | Path | None,
+    default_name: str,
+) -> Path:
+    if target_path:
+        target = Path(target_path).expanduser().resolve()
+    else:
+        target_root = ensure_export_dir(target_dir=target_dir)
+        target = target_root / default_name
+    ensure_dir(target.parent)
+    return target
 
 
 def open_path(path: str) -> None:
@@ -1340,6 +1782,9 @@ def finish_review(payload: dict) -> dict:
                 schedule["retrievability"],
             ),
         )
+        record_activity("review", 1, {"rating": rating, "duration_seconds": duration}, conn)
+        if duration:
+            record_activity("study_seconds", duration, {"item_id": item_id}, conn)
         conn.commit()
         updated = conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
     return {"item": row_item(updated), "schedule": schedule, "duration_seconds": duration}
@@ -1350,13 +1795,15 @@ def update_items(payload: dict) -> dict:
     if not ids:
         raise ValueError("没有选择文件")
     fields = payload.get("fields", {})
-    allowed = {"tags", "status", "priority", "notes", "pinned", "due_at"}
+    allowed = {"tags", "status", "priority", "notes", "pinned", "due_at", "deck_id"}
     assignments = []
     values = []
     for key, value in fields.items():
         if key in allowed:
             if key == "due_at" and isinstance(value, str) and value.endswith("Z"):
                 value = value[:-1]
+            if key == "deck_id":
+                value = int(value)
             assignments.append(f"{key}=?")
             values.append(value)
     if not assignments:
@@ -1445,6 +1892,7 @@ def create_note(payload: dict) -> dict:
             """,
             (str(uuid.uuid4()), item_id, title, str(path), now, now, payload.get("source") or "app"),
         )
+        record_activity("create_note", 1, {"source": payload.get("source") or "app"}, conn)
         conn.commit()
         row = conn.execute("SELECT * FROM notes WHERE id=?", (cur.lastrowid,)).fetchone()
     if payload.get("open_local"):
@@ -1535,7 +1983,357 @@ def export_notes(payload: dict) -> dict:
         copy_file(src, target)
         copied += 1
         exported.append(str(target))
+    record_activity("export_notes", copied, {"missing": missing})
     return {"export_dir": str(target_dir), "exported": copied, "missing": missing, "files": exported}
+
+
+def tag_list(value: str | None) -> list[str]:
+    seen = set()
+    tags = []
+    for raw in str(value or "").replace("，", ",").split(","):
+        tag = raw.strip()
+        key = tag.lower()
+        if tag and key not in seen:
+            tags.append(tag)
+            seen.add(key)
+    return tags
+
+
+def core_achievement_templates() -> list[dict]:
+    templates = [
+        {
+            "id": "first_item",
+            "title": "第一份资料",
+            "description": "添加任意一个文件或文件库资料",
+            "metric": "items",
+            "target": 1,
+            "points": 10,
+            "tier": "bronze",
+        },
+        {
+            "id": "first_single_file",
+            "title": "单文件入口",
+            "description": "添加一个不依赖文件夹扫描的单独文件",
+            "metric": "single_files",
+            "target": 1,
+            "points": 10,
+            "tier": "bronze",
+        },
+        {
+            "id": "first_deck",
+            "title": "建立卡组",
+            "description": "创建自己的复习分类",
+            "metric": "custom_decks",
+            "target": 1,
+            "points": 15,
+            "tier": "bronze",
+        },
+        {
+            "id": "first_tag",
+            "title": "标签整理",
+            "description": "给资料贴上标签",
+            "metric": "tagged_items",
+            "target": 1,
+            "points": 10,
+            "tier": "bronze",
+        },
+        {
+            "id": "first_review",
+            "title": "第一次复习",
+            "description": "完成一次复习评价",
+            "metric": "reviews",
+            "target": 1,
+            "points": 15,
+            "tier": "bronze",
+        },
+        {
+            "id": "streak_3",
+            "title": "三日连续",
+            "description": "连续 3 天有复习记录",
+            "metric": "streak",
+            "target": 3,
+            "points": 25,
+            "tier": "silver",
+        },
+        {
+            "id": "first_note",
+            "title": "第一篇笔记",
+            "description": "创建自己的复习笔记",
+            "metric": "notes",
+            "target": 1,
+            "points": 10,
+            "tier": "bronze",
+        },
+    ]
+    for target in [10, 25, 50, 100, 250, 500, 1000]:
+        templates.append({
+            "id": f"review_{target}",
+            "title": f"复习 {target} 次",
+            "description": f"累计完成 {target} 次复习",
+            "metric": "reviews",
+            "target": target,
+            "points": max(20, int(math.sqrt(target) * 12)),
+            "tier": tier_for_target(target),
+        })
+    for target in [10, 25, 50, 100, 250, 500, 1000]:
+        templates.append({
+            "id": f"completion_{target}",
+            "title": f"完成 {target} 份资料",
+            "description": f"标记 {target} 个资料为完成",
+            "metric": "done_items",
+            "target": target,
+            "points": max(20, int(math.sqrt(target) * 10)),
+            "tier": tier_for_target(target),
+        })
+    for target in [5, 10, 20, 50, 100, 200]:
+        templates.append({
+            "id": f"notes_{target}",
+            "title": f"写下 {target} 篇笔记",
+            "description": f"累计创建 {target} 篇复习笔记",
+            "metric": "notes",
+            "target": target,
+            "points": max(20, int(math.sqrt(target) * 10)),
+            "tier": tier_for_target(target),
+        })
+    return templates
+
+
+def tier_for_target(target: int) -> str:
+    if target >= 500:
+        return "legend"
+    if target >= 100:
+        return "diamond"
+    if target >= 50:
+        return "gold"
+    if target >= 10:
+        return "silver"
+    return "bronze"
+
+
+def metric_value(stats: dict, metric: str):
+    if metric in stats:
+        return stats[metric]
+    if metric.startswith("event:"):
+        events = stats.get("events", {})
+        return events.get(metric.split(":", 1)[1], 0)
+    return 0
+
+
+def normalize_achievement_definition(raw: dict, source: str) -> dict | None:
+    try:
+        achievement_id = str(raw.get("id") or "").strip()
+        metric = str(raw.get("metric") or "").strip()
+        target = int(raw.get("target") or 1)
+        if not achievement_id or not metric or target <= 0:
+            return None
+        return {
+            "id": achievement_id,
+            "title": str(raw.get("title") or achievement_id),
+            "description": str(raw.get("description") or ""),
+            "metric": metric,
+            "target": target,
+            "points": max(0, int(raw.get("points") or 0)),
+            "tier": str(raw.get("tier") or tier_for_target(target)),
+            "source": source,
+        }
+    except Exception:
+        return None
+
+
+def load_achievement_plugins() -> list[dict]:
+    config = load_config()
+    if not plugin_enabled("achievement_core", config):
+        return []
+    ensure_app_dirs()
+    definitions: list[dict] = []
+    for entry in sorted(PLUGINS_DIR.iterdir(), key=lambda p: p.name.lower()):
+        if not path_is_dir(entry):
+            continue
+        manifest = entry / "plugin.json"
+        if not path_exists(manifest):
+            continue
+        try:
+            payload = json.loads(read_text_file(manifest).lstrip("\ufeff"))
+        except Exception:
+            log_error(f"成就插件清单读取失败：{manifest}\n" + traceback.format_exc())
+            continue
+        plugin_id = plugin_slug(payload.get("id") or entry.name)
+        if not plugin_enabled(plugin_id, config):
+            continue
+        for raw in payload.get("achievements", []) or []:
+            definition = normalize_achievement_definition(raw, plugin_id)
+            if definition:
+                definition["id"] = f"plugin:{plugin_id}:{definition['id']}"
+                definitions.append(definition)
+    return definitions
+
+
+def achievement_definitions(stats: dict) -> list[dict]:
+    config = load_config()
+    if not plugin_enabled("achievement_core", config):
+        return []
+    definitions = []
+    for raw in core_achievement_templates() + load_achievement_plugins():
+        definition = dict(raw)
+        current = int(metric_value(stats, definition["metric"]) or 0)
+        target = int(definition.get("target") or 1)
+        definition["current"] = current
+        definition["target"] = target
+        definition["progress"] = min(1.0, current / target) if target else 1.0
+        definition["unlocked"] = current >= target
+        definitions.append(definition)
+    definitions.sort(key=lambda item: (item["unlocked"], item.get("points", 0), item["target"], item["id"]))
+    return definitions
+
+
+def reward_level(points: int) -> dict:
+    level = max(1, int(math.sqrt(max(points, 0) / 60)) + 1)
+    current_floor = 60 * (level - 1) * (level - 1)
+    next_floor = 60 * level * level
+    span = max(1, next_floor - current_floor)
+    progress = min(1.0, max(0.0, (points - current_floor) / span))
+    titles = ["见习整理者", "资料骑手", "记忆工匠", "知识策展人", "长期主义者", "大师档案官"]
+    title = titles[min(len(titles) - 1, (level - 1) // 5)]
+    return {
+        "level": level,
+        "title": title,
+        "points": points,
+        "next_level_points": next_floor,
+        "level_progress": progress,
+    }
+
+
+def achievement_summary() -> dict:
+    config = load_config()
+    if not plugin_enabled("achievement_core", config):
+        return {
+            "enabled": False,
+            "stats": {},
+            "total": 0,
+            "unlocked": 0,
+            "points": 0,
+            "reward": reward_level(0),
+            "achievements": [],
+        }
+    today = datetime.now().date()
+    with get_conn() as conn:
+        history_dates = [
+            row["day"]
+            for row in conn.execute(
+                "SELECT DISTINCT substr(ended_at,1,10) AS day FROM review_history ORDER BY day DESC LIMIT 120"
+            ).fetchall()
+        ]
+        date_set = set(history_dates)
+        streak = 0
+        cursor = today
+        while cursor.isoformat() in date_set:
+            streak += 1
+            cursor -= timedelta(days=1)
+        stats = {
+            "items": conn.execute("SELECT COUNT(*) AS c FROM items").fetchone()["c"],
+            "single_files": conn.execute("SELECT COUNT(*) AS c FROM items WHERE library_id IS NULL").fetchone()["c"],
+            "custom_decks": conn.execute("SELECT COUNT(*) AS c FROM decks WHERE is_default=0").fetchone()["c"],
+            "tagged_items": conn.execute("SELECT COUNT(*) AS c FROM items WHERE TRIM(COALESCE(tags,''))<>''").fetchone()["c"],
+            "reviews": conn.execute("SELECT COUNT(*) AS c FROM review_history").fetchone()["c"],
+            "notes": conn.execute("SELECT COUNT(*) AS c FROM notes").fetchone()["c"],
+            "done_items": conn.execute("SELECT COUNT(*) AS c FROM items WHERE status='done'").fetchone()["c"],
+            "streak": streak,
+        }
+        stats["events"] = {
+            row["event_type"]: int(row["total"] or 0)
+            for row in conn.execute(
+                "SELECT event_type, SUM(amount) AS total FROM activity_events GROUP BY event_type"
+            ).fetchall()
+        }
+        definitions = achievement_definitions(stats)
+        for achievement in definitions:
+            if achievement["unlocked"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO achievements(id, unlocked_at) VALUES(?, ?)",
+                    (achievement["id"], iso_now()),
+                )
+        unlocked_rows = {
+            row["id"]: row["unlocked_at"]
+            for row in conn.execute("SELECT * FROM achievements").fetchall()
+        }
+        conn.commit()
+    achievements = []
+    for item in definitions:
+        unlocked_at = unlocked_rows.get(item["id"])
+        achievements.append({**item, "unlocked_at": unlocked_at, "unlocked": bool(unlocked_at or item["unlocked"])})
+    achievements.sort(key=lambda item: (not item["unlocked"], item.get("source", ""), item.get("target", 0), item["id"]))
+    points = sum(int(item.get("points") or 0) for item in achievements if item["unlocked"])
+    return {
+        "enabled": True,
+        "stats": stats,
+        "total": len(achievements),
+        "unlocked": sum(1 for item in achievements if item["unlocked"]),
+        "points": points,
+        "reward": reward_level(points),
+        "achievements": achievements,
+    }
+
+
+def rows_for_share_payload(conn: sqlite3.Connection, payload: dict) -> list[sqlite3.Row]:
+    ids = [int(i) for i in payload.get("ids", [])]
+    deck_id = payload.get("deck_id")
+    if ids:
+        placeholders = ",".join(["?"] * len(ids))
+        return conn.execute(f"SELECT * FROM items WHERE id IN ({placeholders}) ORDER BY file_name ASC", ids).fetchall()
+    if deck_id:
+        return conn.execute("SELECT * FROM items WHERE deck_id=? ORDER BY file_name ASC", (int(deck_id),)).fetchall()
+    return conn.execute("SELECT * FROM items ORDER BY file_name ASC").fetchall()
+
+
+def export_share_package(payload: dict) -> dict:
+    include_files = bool(payload.get("include_files", False))
+    target = resolve_output_file(
+        payload.get("target_path") or None,
+        payload.get("target_dir") or None,
+        timestamped_name("LiFileReviewer_share", ".zip"),
+    )
+    with get_conn() as conn:
+        item_rows = rows_for_share_payload(conn, payload)
+        item_ids = [row["id"] for row in item_rows]
+        deck_rows = conn.execute("SELECT * FROM decks ORDER BY id").fetchall()
+        note_rows: list[sqlite3.Row] = []
+        if item_ids:
+            placeholders = ",".join(["?"] * len(item_ids))
+            note_rows = conn.execute(f"SELECT * FROM notes WHERE item_id IN ({placeholders}) ORDER BY id", item_ids).fetchall()
+    manifest = {
+        "format": "LiFileReviewerShare",
+        "format_version": 1,
+        "exported_at": iso_now(),
+        "app_version": APP_VERSION,
+        "include_files": include_files,
+        "item_count": len(item_rows),
+        "note_count": len(note_rows),
+    }
+    with zipfile.ZipFile(fs_path(target), "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("share_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        archive.writestr("decks.json", json.dumps([dict(row) for row in deck_rows], ensure_ascii=False, indent=2))
+        archive.writestr("items.json", json.dumps([dict(row) for row in item_rows], ensure_ascii=False, indent=2))
+        archive.writestr("notes.json", json.dumps([dict(row) for row in note_rows], ensure_ascii=False, indent=2))
+        for note in note_rows:
+            path = Path(note["file_path"])
+            if path_exists(path) and path_is_file(path):
+                archive.write(fs_path(path), str(Path("notes") / path.name))
+        if include_files:
+            used_names = set()
+            for row in item_rows:
+                source = Path(row["file_path"])
+                if not path_exists(source) or not path_is_file(source):
+                    continue
+                safe_name = safe_filename(row["file_name"], f"item_{row['id']}") or f"item_{row['id']}"
+                arcname = Path("files") / safe_name
+                counter = 2
+                while str(arcname) in used_names:
+                    arcname = Path("files") / f"{Path(safe_name).stem}_{counter}{Path(safe_name).suffix}"
+                    counter += 1
+                used_names.add(str(arcname))
+                archive.write(fs_path(source), str(arcname))
+    record_activity("export_share", 1, {"item_count": len(item_rows), "include_files": include_files})
+    return {"export_path": str(target), "item_count": len(item_rows), "include_files": include_files}
 
 
 def repair_imported_note_paths() -> None:
@@ -1585,31 +2383,42 @@ def tree_for_library(library_id: int, rel: str = "") -> dict:
     return {"library": dict(library), "rel": rel, "children": children}
 
 
-def backup_database(target_dir: str | Path | None = None) -> dict:
-    target = backup_sqlite_database_to(DB_PATH, ensure_export_dir(target_dir=target_dir), "manual") if target_dir else backup_sqlite_database(DB_PATH, "manual")
+def backup_database(target_dir: str | Path | None = None, target_path: str | Path | None = None) -> dict:
+    if target_path:
+        target = Path(target_path).expanduser().resolve()
+        snapshot_sqlite_database(DB_PATH, target)
+    else:
+        target = backup_sqlite_database_to(DB_PATH, ensure_export_dir(target_dir=target_dir), "manual") if target_dir else backup_sqlite_database(DB_PATH, "manual")
+    record_activity("backup_database")
     return {"backup_path": str(target)}
 
 
-def export_csv(target_dir: str | Path | None = None) -> Path:
-    target_root = ensure_export_dir(target_dir=target_dir)
-    target = target_root / f"review_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+def export_csv(target_dir: str | Path | None = None, target_path: str | Path | None = None) -> Path:
+    target = resolve_output_file(target_path, target_dir, timestamped_name("review_items", ".csv"))
     with get_conn() as conn, open(fs_path(target), "w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow([
-            "file_name", "file_path", "tags", "status", "due_at",
+            "file_name", "file_path", "deck", "tags", "status", "due_at",
             "review_count", "lapse_count", "total_read_seconds", "last_review_at",
         ])
-        for row in conn.execute("SELECT * FROM items ORDER BY file_name ASC"):
+        for row in conn.execute(
+            """
+            SELECT i.*, d.name AS deck_name
+              FROM items i
+              LEFT JOIN decks d ON d.id=i.deck_id
+             ORDER BY i.file_name ASC
+            """
+        ):
             writer.writerow([
-                row["file_name"], row["file_path"], row["tags"], row["status"], row["due_at"],
+                row["file_name"], row["file_path"], row["deck_name"] or "", row["tags"], row["status"], row["due_at"],
                 row["review_count"], row["lapse_count"], row["total_read_seconds"], row["last_review_at"],
             ])
+    record_activity("export_csv")
     return target
 
 
-def export_portable_json(target_dir: str | Path | None = None) -> Path:
-    target_root = ensure_export_dir(target_dir=target_dir)
-    target = target_root / f"review_portable_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+def export_portable_json(target_dir: str | Path | None = None, target_path: str | Path | None = None) -> Path:
+    target = resolve_output_file(target_path, target_dir, timestamped_name("review_portable", ".json"))
     with get_conn() as conn:
         payload = {
             "format": "LiFileReviewerPortable",
@@ -1619,58 +2428,76 @@ def export_portable_json(target_dir: str | Path | None = None) -> Path:
             "schema_version": db_user_version(conn),
             "config": load_config(),
             "libraries": [dict(row) for row in conn.execute("SELECT * FROM libraries ORDER BY id")],
+            "decks": [dict(row) for row in conn.execute("SELECT * FROM decks ORDER BY id")],
             "items": [dict(row) for row in conn.execute("SELECT * FROM items ORDER BY id")],
             "review_history": [
                 dict(row) for row in conn.execute("SELECT * FROM review_history ORDER BY id")
+            ],
+            "notes": [dict(row) for row in conn.execute("SELECT * FROM notes ORDER BY id")],
+            "achievements": [dict(row) for row in conn.execute("SELECT * FROM achievements ORDER BY id")],
+            "social_profile": [dict(row) for row in conn.execute("SELECT * FROM social_profile ORDER BY id")],
+            "activity_events": [
+                dict(row) for row in conn.execute("SELECT * FROM activity_events ORDER BY id")
             ],
             "schema_migrations": [
                 dict(row) for row in conn.execute("SELECT * FROM schema_migrations ORDER BY id")
             ],
         }
     write_text_file(target, json.dumps(payload, ensure_ascii=False, indent=2))
+    record_activity("export_json")
     return target
 
 
-def export_profile_package(target_dir: str | Path | None = None) -> Path:
+def export_profile_package(target_dir: str | Path | None = None, target_path: str | Path | None = None) -> Path:
     ensure_app_dirs()
-    target_root = ensure_export_dir(target_dir=target_dir)
-    target = target_root / f"LiFileReviewer2_profile_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    target = resolve_output_file(target_path, target_dir, timestamped_name("LiFileReviewer2_profile", ".zip"))
     included: list[tuple[Path, str]] = []
+    temp_snapshot_dir = None
     for path in [CONFIG_PATH, LOG_PATH]:
         if path_exists(path):
             included.append((path, path.name))
     if path_exists(DB_PATH):
-        backup_path = backup_sqlite_database(DB_PATH, "profile_export")
+        temp_snapshot_dir = tempfile.TemporaryDirectory(prefix="lfr_profile_")
+        backup_path = snapshot_sqlite_database(DB_PATH, Path(temp_snapshot_dir.name) / DB_PATH.name)
         included.append((backup_path, DB_PATH.name))
-    for folder, arc_prefix in [(BACKUP_DIR, "backups"), (PLUGINS_DIR, "plugins"), (ensure_notes_dir(), "notes")]:
-        if path_exists(folder):
-            for file_path in folder.rglob("*"):
-                if path_is_file(file_path):
-                    included.append((file_path, str(Path(arc_prefix) / file_path.relative_to(folder))))
-    with zipfile.ZipFile(fs_path(target), "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        manifest = {
-            "format": "LiFileReviewerProfile",
-            "format_version": 1,
-            "exported_at": iso_now(),
-            "app_version": APP_VERSION,
-            "source_app_dir": str(APP_DIR),
-        }
-        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        seen = set()
-        for src, arcname in included:
-            if arcname in seen or src.resolve() == target.resolve() or src.suffix.lower() == ".zip":
-                continue
-            seen.add(arcname)
-            archive.write(fs_path(src), arcname)
+    try:
+        for folder, arc_prefix in [(BACKUP_DIR, "backups"), (PLUGINS_DIR, "plugins"), (ensure_notes_dir(), "notes")]:
+            if path_exists(folder):
+                for file_path in folder.rglob("*"):
+                    if path_is_file(file_path):
+                        included.append((file_path, str(Path(arc_prefix) / file_path.relative_to(folder))))
+        with zipfile.ZipFile(fs_path(target), "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            manifest = {
+                "format": "LiFileReviewerProfile",
+                "format_version": 1,
+                "exported_at": iso_now(),
+                "app_version": APP_VERSION,
+                "source_app_dir": str(APP_DIR),
+            }
+            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+            seen = set()
+            for src, arcname in included:
+                if arcname in seen or src.resolve() == target.resolve() or src.suffix.lower() == ".zip":
+                    continue
+                seen.add(arcname)
+                archive.write(fs_path(src), arcname)
+    finally:
+        if temp_snapshot_dir is not None:
+            temp_snapshot_dir.cleanup()
+    record_activity("export_profile")
     return target
 
 
-def import_profile_package(package_path: str) -> dict:
+def import_profile_package(
+    package_path: str,
+    backup_target_dir: str | Path | None = None,
+    backup_target_path: str | Path | None = None,
+) -> dict:
     package = Path(package_path).expanduser().resolve()
     if not path_exists(package) or not path_is_file(package):
         raise ValueError(f"迁移包不存在：{package}")
     ensure_app_dirs()
-    backup = export_profile_package()
+    backup = export_profile_package(target_dir=backup_target_dir, target_path=backup_target_path)
     with tempfile.TemporaryDirectory() as tmp_name:
         tmp_dir = Path(tmp_name)
         with zipfile.ZipFile(fs_path(package), "r") as archive:
@@ -1754,9 +2581,141 @@ def move_profile_dir(target_dir: str) -> dict:
     return {"moved": True, "requested_dir": str(requested_dir), "app": profile_paths()}
 
 
+def core_plugin_rows(config: dict | None = None) -> list[dict]:
+    config = config or load_config()
+    rows = []
+    for plugin_id, plugin in CORE_PLUGINS.items():
+        rows.append({
+            **plugin,
+            "enabled": plugin_enabled(plugin_id, config),
+            "path": "",
+            "has_manifest": False,
+            "source": "builtin",
+            "configurable": True,
+        })
+    return rows
+
+
+def set_plugin_enabled(plugin_id: str, enabled: bool) -> dict:
+    config = load_config()
+    plugins = config.setdefault("plugins", {})
+    if plugin_id in CORE_PLUGINS:
+        plugins.setdefault("core", {})[plugin_id] = bool(enabled)
+    else:
+        installed = plugins.setdefault("installed", {})
+        if isinstance(installed, list):
+            installed = {name: True for name in installed}
+            plugins["installed"] = installed
+        installed[plugin_id] = bool(enabled)
+    save_config(config)
+    return {"plugin": plugin_id, "enabled": bool(enabled), "plugins": list_plugins()["plugins"]}
+
+
+def read_plugin_manifest(plugin_dir: Path) -> dict:
+    manifest = plugin_dir / "plugin.json"
+    if not path_exists(manifest):
+        raise ValueError("插件缺少 plugin.json 清单文件")
+    try:
+        payload = json.loads(read_text_file(manifest).lstrip("\ufeff"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"plugin.json 格式错误：{exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("plugin.json 必须是 JSON 对象")
+    plugin_id = plugin_slug(payload.get("id") or plugin_dir.name)
+    payload["id"] = plugin_id
+    payload.setdefault("name", plugin_id)
+    return payload
+
+
+def unique_plugin_destination(plugin_id: str) -> Path:
+    base = PLUGINS_DIR / plugin_slug(plugin_id)
+    if not path_exists(base):
+        return base
+    for index in range(2, 1000):
+        candidate = PLUGINS_DIR / f"{base.name}_{index}"
+        if not path_exists(candidate):
+            return candidate
+    raise ValueError("无法创建唯一插件目录，请清理 plugins 目录后重试")
+
+
+def copy_plugin_folder(source_dir: Path, destination: Path) -> None:
+    if path_exists(destination):
+        shutil.rmtree(fs_path(destination))
+    shutil.copytree(fs_path(source_dir), fs_path(destination), ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+
+def safe_extract_zip(archive: zipfile.ZipFile, destination: Path) -> None:
+    root = destination.resolve()
+    for member in archive.infolist():
+        member_path = (root / member.filename).resolve()
+        if os.path.commonpath([str(root), str(member_path)]) != str(root):
+            raise ValueError(f"插件 zip 包含不安全路径：{member.filename}")
+    archive.extractall(fs_path(root))
+
+
+def import_plugin(source_path: str | Path, enable: bool = True) -> dict:
+    ensure_app_dirs()
+    source = Path(source_path).expanduser().resolve()
+    if not path_exists(source):
+        raise ValueError(f"插件来源不存在：{source}")
+
+    temp_dir: tempfile.TemporaryDirectory | None = None
+    try:
+        if path_is_file(source):
+            if source.suffix.lower() != ".zip":
+                raise ValueError("插件文件目前支持 .zip 包；也可以选择插件文件夹导入")
+            temp_dir = tempfile.TemporaryDirectory()
+            extracted = Path(temp_dir.name)
+            with zipfile.ZipFile(fs_path(source), "r") as archive:
+                safe_extract_zip(archive, extracted)
+            candidates = [entry for entry in extracted.iterdir() if entry.is_dir()]
+            if path_exists(extracted / "plugin.json"):
+                plugin_source = extracted
+            elif len(candidates) == 1 and path_exists(candidates[0] / "plugin.json"):
+                plugin_source = candidates[0]
+            else:
+                raise ValueError("zip 插件包根目录或唯一子目录中必须包含 plugin.json")
+        elif path_is_dir(source):
+            plugin_source = source
+        else:
+            raise ValueError("插件来源必须是文件夹或 .zip 文件")
+
+        manifest = read_plugin_manifest(plugin_source)
+        if manifest["id"] in CORE_PLUGINS:
+            raise ValueError("不能覆盖内置插件 ID")
+        destination = unique_plugin_destination(manifest["id"])
+        copy_plugin_folder(plugin_source, destination)
+        copied_manifest = destination / "plugin.json"
+        write_text_file(copied_manifest, json.dumps(manifest, ensure_ascii=False, indent=2))
+
+        config = load_config()
+        installed = config.setdefault("plugins", {}).setdefault("installed", {})
+        if isinstance(installed, list):
+            installed = {name: True for name in installed}
+            config["plugins"]["installed"] = installed
+        installed[manifest["id"]] = bool(enable)
+        save_config(config)
+
+        return {
+            "plugin": {
+                "id": manifest["id"],
+                "name": manifest.get("name") or manifest["id"],
+                "version": manifest.get("version", ""),
+                "path": str(destination),
+                "enabled": bool(enable),
+            },
+            "plugins": list_plugins()["plugins"],
+            "plugins_dir": str(PLUGINS_DIR),
+        }
+    finally:
+        if temp_dir is not None:
+            temp_dir.cleanup()
+
+
 def list_plugins() -> dict:
     ensure_app_dirs()
-    plugins = []
+    config = load_config()
+    plugins = core_plugin_rows(config)
     for entry in sorted(PLUGINS_DIR.iterdir(), key=lambda p: p.name.lower()):
         if not path_is_dir(entry):
             continue
@@ -1768,16 +2727,142 @@ def list_plugins() -> dict:
             "enabled": False,
             "path": str(entry),
             "has_manifest": path_exists(manifest),
+            "source": "external",
+            "builtin": False,
+            "configurable": True,
         }
         if path_exists(manifest):
             try:
-                payload = json.loads(read_text_file(manifest))
-                data.update({key: payload.get(key, data.get(key)) for key in ["id", "name", "version", "description"]})
-                data["enabled"] = bool(payload.get("enabled", False))
+                payload = json.loads(read_text_file(manifest).lstrip("\ufeff"))
+                data.update({key: payload.get(key, data.get(key)) for key in ["id", "name", "version", "description", "category"]})
+                data["id"] = plugin_slug(data["id"])
+                data["enabled"] = plugin_enabled(data["id"], config)
             except Exception:
                 data["error"] = "plugin.json 读取失败"
         plugins.append(data)
     return {"plugins": plugins, "plugins_dir": str(PLUGINS_DIR)}
+
+
+def social_profile_from_config(config: dict | None = None) -> dict:
+    config = config or load_config()
+    social = dict(DEFAULT_CONFIG["social"])
+    social.update(config.get("social", {}))
+    return social
+
+
+def get_social_profile() -> dict:
+    config = load_config()
+    if not plugin_enabled("social_profile", config):
+        return {"enabled": False, "profile": social_profile_from_config(config)}
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM social_profile WHERE id=1").fetchone()
+    profile = social_profile_from_config(config)
+    if row:
+        profile.update({
+            "display_name": row["display_name"] or profile["display_name"],
+            "handle": row["handle"] or profile["handle"],
+            "bio": row["bio"] or profile["bio"],
+            "location": row["location"] or profile["location"],
+            "website": row["website"] or profile["website"],
+            "contact": row["contact"] or profile["contact"],
+            "share_stats": bool(row["share_stats"]),
+            "share_achievements": bool(row["share_achievements"]),
+            "allow_friend_discovery": bool(row["allow_friend_discovery"]),
+            "updated_at": row["updated_at"],
+        })
+    return {"enabled": True, "profile": profile}
+
+
+def save_social_profile(payload: dict) -> dict:
+    config = load_config()
+    if not plugin_enabled("social_profile", config):
+        raise ValueError("社交资料插件已关闭")
+    allowed_text = ["display_name", "handle", "bio", "location", "website", "contact"]
+    allowed_bool = ["share_stats", "share_achievements", "allow_friend_discovery"]
+    current = social_profile_from_config(config)
+    incoming = payload.get("profile", payload)
+    for key in allowed_text:
+        if key in incoming:
+            current[key] = str(incoming.get(key) or "").strip()[:500]
+    for key in allowed_bool:
+        if key in incoming:
+            current[key] = bool(incoming.get(key))
+    config["social"] = current
+    save_config(config)
+    now = iso_now()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_profile(
+                id, display_name, handle, bio, location, website, contact,
+                share_stats, share_achievements, allow_friend_discovery, updated_at
+            ) VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                display_name=excluded.display_name,
+                handle=excluded.handle,
+                bio=excluded.bio,
+                location=excluded.location,
+                website=excluded.website,
+                contact=excluded.contact,
+                share_stats=excluded.share_stats,
+                share_achievements=excluded.share_achievements,
+                allow_friend_discovery=excluded.allow_friend_discovery,
+                updated_at=excluded.updated_at
+            """,
+            (
+                current["display_name"],
+                current["handle"],
+                current["bio"],
+                current["location"],
+                current["website"],
+                current["contact"],
+                int(bool(current["share_stats"])),
+                int(bool(current["share_achievements"])),
+                int(bool(current["allow_friend_discovery"])),
+                now,
+            ),
+        )
+        record_activity("update_social_profile", conn=conn)
+        conn.commit()
+    return get_social_profile()
+
+
+def social_card() -> dict:
+    config = load_config()
+    enabled = plugin_enabled("social_profile", config)
+    profile = get_social_profile()["profile"]
+    card = {
+        "format": "LiFileReviewerSocialCard",
+        "format_version": 1,
+        "app_version": APP_VERSION,
+        "exported_at": iso_now(),
+        "enabled": enabled,
+        "profile": {
+            "display_name": profile.get("display_name", ""),
+            "handle": profile.get("handle", ""),
+            "bio": profile.get("bio", ""),
+            "location": profile.get("location", ""),
+            "website": profile.get("website", ""),
+            "contact": profile.get("contact", ""),
+            "allow_friend_discovery": bool(profile.get("allow_friend_discovery")),
+        },
+    }
+    if enabled and profile.get("share_stats"):
+        overview = get_overview()
+        card["stats"] = {
+            "total": overview["stats"]["total"],
+            "reviewed_today": overview["stats"]["reviewed_today"],
+            "streak": overview["stats"]["streak"],
+        }
+    if enabled and profile.get("share_achievements") and plugin_enabled("achievement_core", config):
+        achievements = achievement_summary()
+        card["achievements"] = {
+            "unlocked": achievements["unlocked"],
+            "total": achievements["total"],
+            "points": achievements["points"],
+            "reward": achievements["reward"],
+        }
+    return card
 
 
 def health_check() -> dict:
@@ -1887,6 +2972,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 with get_conn() as conn:
                     rows = conn.execute("SELECT * FROM libraries ORDER BY display_name ASC").fetchall()
                 self.send_json({"libraries": [dict(row) for row in rows]})
+            elif path == "/api/decks":
+                self.send_json(list_decks())
+            elif path == "/api/achievements":
+                self.send_json(achievement_summary())
             elif path == "/api/tree":
                 library_id = int((params.get("library_id") or ["0"])[0])
                 rel = (params.get("rel") or [""])[0]
@@ -1905,6 +2994,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 })
             elif path == "/api/plugins":
                 self.send_json(list_plugins())
+            elif path == "/api/social/profile":
+                self.send_json(get_social_profile())
+            elif path == "/api/social/card":
+                self.send_json(social_card())
             elif path == "/api/notes":
                 item_id = (params.get("item_id") or [""])[0]
                 self.send_json(list_notes(int(item_id) if item_id else None))
@@ -1923,13 +3016,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 item_id = int(path.rsplit("/", 1)[1])
                 self.serve_file(item_id)
             elif path == "/api/export":
-                target = export_csv()
+                target = export_csv(params.get("target_dir", [None])[0], params.get("target_path", [None])[0])
                 self.send_json({"export_path": str(target)})
             elif path == "/api/export-portable":
-                target = export_portable_json()
+                target = export_portable_json(params.get("target_dir", [None])[0], params.get("target_path", [None])[0])
                 self.send_json({"export_path": str(target)})
             elif path == "/api/export-profile":
-                target = export_profile_package()
+                target = export_profile_package(params.get("target_dir", [None])[0], params.get("target_path", [None])[0])
                 self.send_json({"export_path": str(target)})
             elif path == "/" or path.startswith("/web/") or path in ["/style.css", "/app.js"]:
                 self.serve_static(path)
@@ -1968,14 +3061,61 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not selected:
                     self.send_json({"cancelled": True})
                     return
-                result = scan_library(selected)
+                result = scan_library(selected, deck_id=payload.get("deck_id") or None, tags=payload.get("tags") or None)
                 self.send_json({"cancelled": False, "scan": result})
             elif path == "/api/libraries/add":
                 root_path = payload.get("path")
                 if not root_path:
                     raise ValueError("缺少文件库路径")
-                result = scan_library(root_path)
+                result = scan_library(root_path, deck_id=payload.get("deck_id") or None, tags=payload.get("tags") or None)
                 self.send_json({"scan": result})
+            elif path == "/api/files/select":
+                selected = choose_file_dialog(("All files (*.*)",), "选择要加入复习的文件")
+                if not selected:
+                    self.send_json({"cancelled": True})
+                    return
+                result = add_single_file(selected, deck_id=payload.get("deck_id") or None, tags=payload.get("tags") or None)
+                self.send_json({"cancelled": False, "file": result})
+            elif path == "/api/files/add":
+                selected = payload.get("path")
+                if not selected:
+                    raise ValueError("File path is required")
+                result = add_single_file(selected, deck_id=payload.get("deck_id") or None, tags=payload.get("tags") or None)
+                self.send_json({"file": result})
+            elif path == "/api/decks/create":
+                self.send_json(create_deck(payload))
+            elif path == "/api/decks/update":
+                self.send_json(update_deck(payload))
+            elif path == "/api/decks/delete":
+                self.send_json(delete_deck(payload))
+            elif path == "/api/plugins/toggle":
+                plugin_id = str(payload.get("id") or "").strip()
+                if not plugin_id:
+                    raise ValueError("缺少插件 ID")
+                self.send_json(set_plugin_enabled(plugin_id, bool(payload.get("enabled"))))
+            elif path == "/api/plugins/import/select-file":
+                selected = choose_file_dialog(("Zip files (*.zip)", "All files (*.*)"), "选择插件 zip 包")
+                if not selected:
+                    self.send_json({"cancelled": True})
+                    return
+                result = import_plugin(selected, bool(payload.get("enable", True)))
+                result["cancelled"] = False
+                self.send_json(result)
+            elif path == "/api/plugins/import/select-folder":
+                selected = choose_folder_dialog()
+                if not selected:
+                    self.send_json({"cancelled": True})
+                    return
+                result = import_plugin(selected, bool(payload.get("enable", True)))
+                result["cancelled"] = False
+                self.send_json(result)
+            elif path == "/api/plugins/import":
+                source_path = payload.get("path")
+                if not source_path:
+                    raise ValueError("缺少插件路径")
+                self.send_json(import_plugin(source_path, bool(payload.get("enable", True))))
+            elif path == "/api/social/profile":
+                self.send_json(save_social_profile(payload))
             elif path == "/api/profile/select":
                 selected = choose_folder_dialog()
                 if not selected:
@@ -1988,8 +3128,24 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"cancelled": True})
                     return
                 self.send_json({"cancelled": False, "path": selected})
+            elif path == "/api/export/save-as":
+                default_name = safe_filename(payload.get("default_name") or "export", "export")
+                extension = str(payload.get("extension") or Path(default_name).suffix or "").strip()
+                if extension and not default_name.lower().endswith(extension.lower()):
+                    default_name += extension if extension.startswith(".") else f".{extension}"
+                file_types = tuple(payload.get("file_types") or ("All files (*.*)",))
+                selected = choose_save_file_dialog(
+                    default_name,
+                    file_types=file_types,
+                    title=payload.get("title") or "保存导出文件",
+                    initial_dir=payload.get("initial_dir") or None,
+                )
+                if not selected:
+                    self.send_json({"cancelled": True})
+                    return
+                self.send_json({"cancelled": False, "path": selected})
             elif path == "/api/profile/select-package":
-                selected = choose_file_dialog(("Zip files (*.zip)", "All files (*.*)"))
+                selected = choose_file_dialog(("Zip files (*.zip)", "All files (*.*)"), "选择迁移包")
                 if not selected:
                     self.send_json({"cancelled": True})
                     return
@@ -1997,7 +3153,7 @@ class AppHandler(BaseHTTPRequestHandler):
             elif path == "/api/libraries/scan":
                 root_path = payload.get("path")
                 if root_path:
-                    self.send_json({"scan": scan_library(root_path)})
+                    self.send_json({"scan": scan_library(root_path, deck_id=payload.get("deck_id") or None, tags=payload.get("tags") or None)})
                 else:
                     config = load_config()
                     scans = [scan_library(path, config) for path in config.get("library_roots", [])]
@@ -2038,6 +3194,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(update_items(payload))
             elif path == "/api/items/delete":
                 self.send_json(delete_items(payload))
+            elif path == "/api/share/export":
+                self.send_json(export_share_package(payload))
             elif path == "/api/notes/create":
                 self.send_json(create_note(payload))
             elif path == "/api/notes/save":
@@ -2066,17 +3224,21 @@ class AppHandler(BaseHTTPRequestHandler):
                 package_path = payload.get("path")
                 if not package_path:
                     raise ValueError("缺少迁移包路径")
-                self.send_json(import_profile_package(package_path))
+                self.send_json(import_profile_package(
+                    package_path,
+                    backup_target_dir=payload.get("backup_target_dir") or None,
+                    backup_target_path=payload.get("backup_target_path") or None,
+                ))
             elif path == "/api/backup":
-                self.send_json(backup_database(payload.get("target_dir") or None))
+                self.send_json(backup_database(payload.get("target_dir") or None, payload.get("target_path") or None))
             elif path == "/api/export":
-                target = export_csv(payload.get("target_dir") or None)
+                target = export_csv(payload.get("target_dir") or None, payload.get("target_path") or None)
                 self.send_json({"export_path": str(target)})
             elif path == "/api/export-portable":
-                target = export_portable_json(payload.get("target_dir") or None)
+                target = export_portable_json(payload.get("target_dir") or None, payload.get("target_path") or None)
                 self.send_json({"export_path": str(target)})
             elif path == "/api/export-profile":
-                target = export_profile_package(payload.get("target_dir") or None)
+                target = export_profile_package(payload.get("target_dir") or None, payload.get("target_path") or None)
                 self.send_json({"export_path": str(target)})
             elif path == "/api/health":
                 self.send_json(health_check())

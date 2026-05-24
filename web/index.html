@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>智能文件复习系统 2.7</title>
+  <title>智能文件复习系统 2.12.0</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -39,6 +39,9 @@
       <div class="sidebar-foot">
         <button id="chooseLibraryBtn" class="ghost-button full" title="选择本地文件库" data-i18n-title="actions.chooseLibrary">
           <span class="ico">＋</span><span data-i18n="actions.addLibrary">添加文件库</span>
+        </button>
+        <button id="chooseFileBtn" class="ghost-button full" title="添加单个文件" data-i18n-title="actions.chooseFile">
+          <span class="ico">⊕</span><span data-i18n="actions.addFile">添加文件</span>
         </button>
         <button id="scanAllBtn" class="ghost-button full" title="扫描全部文件库" data-i18n-title="actions.scanAll">
           <span class="ico">↻</span><span data-i18n="actions.rescan">重新扫描</span>
@@ -87,7 +90,7 @@
           </div>
         </div>
 
-        <div class="dashboard-layout">
+        <div id="dashboardLayout" class="dashboard-layout">
           <section class="panel due-panel">
             <div class="panel-head">
               <h3 data-i18n="dashboard.queue">复习队列</h3>
@@ -102,6 +105,7 @@
             </div>
             <div id="futureBars" class="future-bars"></div>
           </section>
+          <div id="dashboardPluginHost" class="plugin-host"></div>
         </div>
       </section>
 
@@ -111,6 +115,17 @@
             <div class="panel-head">
               <h3 data-i18n="library.localLibraries">本地文件库</h3>
               <button id="chooseLibraryBtn2" class="icon-button" title="添加文件库" data-i18n-title="actions.addLibrary">＋</button>
+            </div>
+            <div class="library-actions-row">
+              <button id="chooseFileBtn2" class="secondary-button" data-i18n="actions.addFile">添加文件</button>
+              <button id="newDeckBtn" class="secondary-button" data-i18n="actions.newDeck">新建卡组</button>
+            </div>
+            <div class="deck-box">
+              <div class="panel-head compact-head">
+                <h4 data-i18n="decks.title">复习卡组</h4>
+                <button id="clearDeckFilterBtn" class="text-button" data-i18n="filters.all">全部</button>
+              </div>
+              <div id="deckList" class="deck-list"></div>
             </div>
             <div id="libraryList" class="library-list"></div>
             <form id="manualLibraryForm" class="quick-path-form">
@@ -140,8 +155,14 @@
                 <option value="done" data-i18n="status.done">完成</option>
                 <option value="all" data-i18n="status.all">全部状态</option>
               </select>
+              <select id="deckFilter" title="卡组筛选" data-i18n-title="decks.filter">
+                <option value="" data-i18n="decks.all">全部卡组</option>
+              </select>
               <button id="batchTagBtn" class="secondary-button" title="批量标签" data-i18n-title="batch.tag">
                 <span class="ico">#</span><span data-i18n="batch.tagShort">标签</span>
+              </button>
+              <button id="batchDeckBtn" class="secondary-button" title="分配卡组" data-i18n-title="batch.deck">
+                <span class="ico">▤</span><span data-i18n="batch.deckShort">卡组</span>
               </button>
               <button id="batchSuspendBtn" class="secondary-button" title="暂停或恢复" data-i18n-title="batch.suspend">
                 <span class="ico">Ⅱ</span><span data-i18n="batch.suspendShort">暂停</span>
@@ -158,6 +179,9 @@
               <button id="batchDeleteBtn" class="secondary-button" title="删除索引记录" data-i18n-title="batch.delete">
                 <span class="ico">×</span><span data-i18n="batch.deleteShort">删除</span>
               </button>
+              <button id="shareBtn" class="secondary-button" title="导出分享包" data-i18n-title="actions.share">
+                <span class="ico">⇪</span><span data-i18n="actions.share">分享</span>
+              </button>
             </div>
             <div class="table-wrap">
               <table class="item-table">
@@ -165,6 +189,7 @@
                   <tr>
                     <th class="check-cell"><input id="selectAll" type="checkbox"></th>
                     <th data-sort="file_name" data-i18n="table.file">文件</th>
+                    <th data-i18n="table.deck">卡组</th>
                     <th data-sort="due_at" data-i18n="table.due">到期</th>
                     <th data-sort="retrievability" data-i18n="table.retention">记忆率</th>
                     <th data-sort="review_count" data-i18n="table.count">次数</th>
@@ -403,11 +428,17 @@
             </dl>
             <div class="plugins-box">
               <div class="panel-head compact-head">
-                <h4 data-i18n="plugins.title">插件开发预留</h4>
-                <button id="refreshPluginsBtn" class="text-button" data-i18n="actions.refresh">刷新</button>
+                <h4 data-i18n="plugins.title">插件管理</h4>
+                <div class="plugin-actions">
+                  <button id="importPluginZipBtn" class="text-button" data-i18n="plugins.importZip">导入插件包</button>
+                  <button id="importPluginFolderBtn" class="text-button" data-i18n="plugins.importFolder">导入文件夹</button>
+                  <button id="openPluginsFolderBtn" class="text-button" data-i18n="plugins.openFolder">打开目录</button>
+                  <button id="refreshPluginsBtn" class="text-button" data-i18n="actions.refresh">刷新</button>
+                </div>
               </div>
               <div id="pluginsList" class="plugin-list"></div>
             </div>
+            <div id="settingsPluginHost" class="settings-plugin-host"></div>
             <div class="health-box">
               <h4 data-i18n="health.title">长期稳定性体检</h4>
               <div id="healthSummary" class="muted" data-i18n="health.hint">点击体检，检查数据库、配置、资源文件和原始文件可见性。</div>
@@ -430,6 +461,14 @@
                 <p data-i18n="help.libraryBody">点击“添加文件库”选择已有资料文件夹，或把路径粘贴到文件库页手动扫描。软件只建立索引，不移动原始文件。</p>
               </article>
               <article class="help-card">
+                <h4 data-i18n="help.singleFileTitle">单独文件</h4>
+                <p data-i18n="help.singleFileBody">也可以直接添加某一个 PDF、文档、图片或视频，不必先把它放进文件夹库。</p>
+              </article>
+              <article class="help-card">
+                <h4 data-i18n="help.decksTitle">卡组与标签</h4>
+                <p data-i18n="help.decksBody">文件库页可以像 Anki 一样新建复习卡组，把资料批量分配到分类里，并用标签继续细分。</p>
+              </article>
+              <article class="help-card">
                 <h4 data-i18n="help.reviewTitle">复习</h4>
                 <p data-i18n="help.reviewBody">每天点击“开始复习”。读完资料后选择忘记、困难、良好或简单，系统会自动安排下一次复习。</p>
               </article>
@@ -448,6 +487,10 @@
               <article class="help-card">
                 <h4 data-i18n="help.exportTitle">导出与迁移</h4>
                 <p data-i18n="help.exportBody">在设置页先选择默认导出目录，再导出 CSV、JSON、数据库备份或完整迁移包。迁移包包含配置、数据库备份、插件和笔记。</p>
+              </article>
+              <article class="help-card">
+                <h4 data-i18n="help.shareTitle">分享包</h4>
+                <p data-i18n="help.shareBody">勾选资料或选择卡组后可导出分享包，默认分享索引、卡组、标签和关联笔记；需要时也可包含原始文件。</p>
               </article>
               <article class="help-card">
                 <h4 data-i18n="help.pathsTitle">配置路径</h4>

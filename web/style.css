@@ -245,8 +245,16 @@ button {
 
 .dashboard-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr) minmax(280px, 0.7fr);
   gap: 18px;
+}
+
+.dashboard-layout.no-achievements {
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+}
+
+.plugin-host {
+  display: contents;
 }
 
 .panel {
@@ -366,9 +374,17 @@ button {
   margin: 12px 0;
 }
 
+.library-actions-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
 .quick-path-form,
 .profile-tools,
-.plugins-box {
+.plugins-box,
+.deck-box {
   display: grid;
   gap: 10px;
   margin: 12px 0;
@@ -423,9 +439,79 @@ button {
   cursor: pointer;
 }
 
-.library-item.active {
+.library-item.active,
+.deck-item.active {
   border-color: var(--accent);
   box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.deck-list,
+.achievement-list {
+  display: grid;
+  gap: 8px;
+}
+
+.deck-item,
+.achievement-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--surface);
+}
+
+.deck-item {
+  cursor: pointer;
+}
+
+.deck-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+}
+
+.deck-item strong,
+.achievement-row strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deck-item small,
+.achievement-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.deck-delete {
+  width: 28px;
+  min-height: 28px;
+}
+
+.achievement-summary {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.achievement-row {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.achievement-row > span {
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 12px;
+  text-align: center;
+}
+
+.achievement-row.unlocked > span {
+  color: var(--good);
 }
 
 .tree-row {
@@ -552,6 +638,22 @@ select {
   background: rgba(37, 99, 235, 0.1);
   color: var(--accent);
   font-size: 12px;
+}
+
+.deck-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  max-width: 120px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .actions-cell {
@@ -955,13 +1057,19 @@ textarea {
   padding: 10px;
 }
 
-.health-box {
+.health-box,
+.social-box {
   margin-top: 18px;
   border-top: 1px solid var(--line);
   padding-top: 14px;
 }
 
-.plugins-box {
+.settings-plugin-host:empty {
+  display: none;
+}
+
+.plugins-box,
+.social-box {
   background: var(--surface);
 }
 
@@ -974,19 +1082,45 @@ textarea {
   gap: 8px;
 }
 
+.plugin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .plugin-row {
   display: grid;
-  gap: 3px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px;
   background: var(--surface);
 }
 
-.plugin-row span {
+.plugin-main {
+  display: grid;
+  gap: 3px;
+}
+
+.plugin-row span,
+.switch-line span {
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.switch-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.social-grid {
+  margin-top: 8px;
 }
 
 .health-box h4 {
